@@ -1,4 +1,4 @@
-"""MB Compresor Pro: native Qt video queue with a fully local AI adviser."""
+"""MB Comprensor de Video IA: native Qt video queue with a fully local AI adviser."""
 import dataclasses
 import datetime
 import json
@@ -17,12 +17,12 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
  QHBoxLayout, QLabel, QPushButton, QFrame, QLineEdit, QDoubleSpinBox, QSpinBox,
  QComboBox, QProgressBar, QPlainTextEdit, QFileDialog, QMessageBox, QSplitter,
  QScrollArea, QDialog, QFormLayout, QDialogButtonBox, QCheckBox, QGroupBox,
- QStackedWidget, QInputDialog, QGridLayout)
+ QStackedWidget, QInputDialog, QGridLayout, QStyle)
 
 import engine
 from local_ai import OllamaClient
 
-VERSION = '1.0.13'
+VERSION = '1.0.24'
 DATA = (Path(os.environ.get('USERPROFILE',str(Path.home())))/'AppData'/'Local' if os.name=='nt' else Path(os.environ.get('LOCALAPPDATA',str(Path.home()))))/'MBCompresorPro'
 CONFIG = DATA / 'settings.json'
 
@@ -151,7 +151,9 @@ class MainWindow(QMainWindow):
         self._animate_windows=QApplication.platformName() not in ('offscreen','minimal')
         if self._animate_windows:self.setWindowOpacity(0.0)
         self.bridge=Bridge(); self.bridge.metadata.connect(self.on_metadata); self.bridge.event.connect(self.log); self.bridge.progress.connect(self.on_progress); self.bridge.result.connect(self.on_result); self.bridge.done.connect(self.on_done); self.bridge.advice.connect(self.on_advice); self.bridge.advice_error.connect(self.ai_error); self.bridge.download_done.connect(lambda _:None)
-        self.setWindowTitle('MB COMPRENSOR IA'); self.resize(1200,900); self.setMinimumSize(940,720); self.setAcceptDrops(True)
+        self.setWindowTitle('MB Comprensor de Video IA'); self.setMinimumSize(940,720); self.setAcceptDrops(True)
+        screen=QApplication.primaryScreen();available=screen.availableGeometry() if screen else None
+        self.resize(1200,min(1000,max(720,available.height()-40)) if available else 1000)
         icon=Path(__file__).resolve().parent/'assets'/'app-logo-02.ico'
         if icon.is_file():self.setWindowIcon(QIcon(str(icon)))
         root=QWidget();root.setObjectName('appRoot'); self.setCentralWidget(root); layout=QVBoxLayout(root); layout.setContentsMargins(26,20,26,18); layout.setSpacing(14)
@@ -162,7 +164,7 @@ class MainWindow(QMainWindow):
         mark=QPixmap(str(Path(__file__).resolve().parent/'assets'/'mb-logo-02.png'))
         bounds=QRegion(QBitmap.fromImage(mark.toImage().createAlphaMask())).boundingRect()
         self.brand_logo.setPixmap(mark.copy(bounds).scaled(92,56,Qt.KeepAspectRatio,Qt.SmoothTransformation));self.brand_logo.setFixedHeight(56);titles.addWidget(self.brand_logo)
-        self.heading=label('MB COMPRENSOR DE IA','title');self.heading.setAlignment(Qt.AlignCenter);titles.addWidget(self.heading)
+        self.heading=label('MB Comprensor de Video IA','title');self.heading.setAlignment(Qt.AlignCenter);titles.addWidget(self.heading)
         self.subtitle=label('Compresión de alta calidad - MP4 en tu equipo','muted');self.subtitle.setAlignment(Qt.AlignCenter);titles.addWidget(self.subtitle);header.addLayout(titles,0,1)
         actions=QHBoxLayout();self.theme_icon=icon_button('theme','Cambiar tema',self.toggle_theme);self.settings_icon=icon_button('settings','Configuración',self.open_settings);self.about_icon=icon_button('about','Acerca de',self.open_about)
         for control in (self.about_icon,self.theme_icon,self.settings_icon):actions.addWidget(control)
@@ -179,10 +181,15 @@ class MainWindow(QMainWindow):
         drop=card(); dl=QHBoxLayout(drop); dl.setContentsMargins(20,14,20,14); dtext=QVBoxLayout(); dtext.addWidget(label('Arrastra tus videos aquí','section')); dtext.addWidget(label('También puedes soltarlos en cualquier parte de la ventana.','muted')); dl.addLayout(dtext); dl.addStretch(); dl.addWidget(button('Agregar carpeta',self.add_folder)); dl.addWidget(button('Agregar videos',self.add_files,True)); cl.addWidget(drop)
         bar=QHBoxLayout(); self.queue_title=label('COLA DE COMPRESIÓN  /  0 VIDEOS','eyebrow'); bar.addWidget(self.queue_title); bar.addStretch(); self.ai_btn=button('Recomendar con IA local',self.ask_ai); bar.addWidget(self.ai_btn); bar.addWidget(button('Limpiar terminados',self.clear_finished)); cl.addLayout(bar)
         self.scroll=QScrollArea(); self.scroll.setWidgetResizable(True); self.queue_widget=QWidget(); self.queue_layout=QVBoxLayout(self.queue_widget); self.queue_layout.setContentsMargins(0,0,0,0); self.queue_layout.setSpacing(10); self.empty=label('Arrastra aquí el video','empty'); self.empty.setAlignment(Qt.AlignCenter); self.queue_layout.addWidget(self.empty,1); self.queue_layout.addStretch(0); self.scroll.setWidget(self.queue_widget); cl.addWidget(self.scroll,1)
-        footer=card(); fl=QVBoxLayout(footer); self.status=label('Listo para comprimir.','section'); fl.addWidget(self.status); self.total_progress=QProgressBar(); self.total_progress.setValue(0); fl.addWidget(self.total_progress); actions=QHBoxLayout(); actions.addWidget(label('2 pasadas · Verificación final de tamaño','muted')); actions.addStretch(); self.pause_btn=button('Pausar',self.pause); self.pause_btn.setEnabled(False); actions.addWidget(self.pause_btn); self.stop_btn=button('Detener todo',self.stop); self.stop_btn.setEnabled(False); actions.addWidget(self.stop_btn); self.start_btn=button('Iniciar compresión  →',self.start,True); actions.addWidget(self.start_btn); fl.addLayout(actions); cl.addWidget(footer)
-        self.logs=QPlainTextEdit(); self.logs.setReadOnly(True); self.logs.setMaximumHeight(100); self.logs.setPlaceholderText('Registro de avisos y eventos'); self.logs.document().setMaximumBlockCount(500); layout.addWidget(self.logs)
+        footer=card(); fl=QVBoxLayout(footer); self.status=label('Listo para comprimir.','section'); fl.addWidget(self.status); self.total_progress=QProgressBar(); self.total_progress.setValue(0); fl.addWidget(self.total_progress); actions=QHBoxLayout(); actions.addWidget(label('Analiza → comprime → verifica tamaño','muted')); actions.addStretch(); self.pause_btn=button('Pausar',self.pause); self.pause_btn.setEnabled(False); actions.addWidget(self.pause_btn); self.stop_btn=button('Detener todo',self.stop); self.stop_btn.setEnabled(False); actions.addWidget(self.stop_btn); self.start_btn=button('Iniciar compresión  →',self.start,True); actions.addWidget(self.start_btn); fl.addLayout(actions); cl.addWidget(footer)
+        log_panel=card();log_layout=QVBoxLayout(log_panel);log_layout.setContentsMargins(10,8,10,8);log_layout.setSpacing(6)
+        self.logs=QPlainTextEdit(); self.logs.setReadOnly(True); self.logs.setMaximumHeight(100); self.logs.setPlaceholderText('Registro de avisos y eventos'); self.logs.document().setMaximumBlockCount(500)
+        log_controls=QHBoxLayout();log_controls.setSpacing(6)
+        self.toggle_logs_button=QPushButton();self.toggle_logs_button.setObjectName('iconButton');self.toggle_logs_button.setFixedSize(32,30);self.toggle_logs_button.setIcon(self.style().standardIcon(QStyle.SP_ArrowDown));self.toggle_logs_button.setToolTip('Minimizar historial');self.toggle_logs_button.setAccessibleName('Minimizar historial');self.toggle_logs_button.clicked.connect(self.toggle_logs)
+        self.clear_logs_button=icon_button('broom','Limpiar registro de eventos',self.logs.clear);self.clear_logs_button.setFixedSize(32,30)
+        log_controls.addWidget(label('Registro de avisos y eventos','muted'));log_controls.addStretch();log_controls.addWidget(self.clear_logs_button);log_controls.addWidget(self.toggle_logs_button);log_layout.addLayout(log_controls);log_layout.addWidget(self.logs);layout.addWidget(log_panel)
         self.apply_theme(); self.theme_timer=QTimer(self); self.theme_timer.timeout.connect(self.apply_theme); self.theme_timer.start(60000)
-        self.log(f'MB Compresor Pro {VERSION}. IA local: {self.settings["ollama_model"]}.')
+        self.log(f'MB Comprensor de Video IA {VERSION}. IA local: {self.settings["ollama_model"]}.')
         update_result=DATA/'updates'/'last-result.json'
         if update_result.is_file():
             try:
@@ -192,6 +199,12 @@ class MainWindow(QMainWindow):
         save_settings(self.settings)
         # Each launch starts with an empty drop area.
     def log(self,text): self.logs.appendPlainText(f'{time.strftime("%H:%M:%S")}  {text}')
+    def toggle_logs(self):
+        expanded=self.logs.isHidden()
+        self.logs.setVisible(expanded)
+        self.toggle_logs_button.setIcon(self.style().standardIcon(QStyle.SP_ArrowDown if expanded else QStyle.SP_ArrowUp))
+        description='Minimizar historial' if expanded else 'Mostrar historial'
+        self.toggle_logs_button.setToolTip(description);self.toggle_logs_button.setAccessibleName(description)
     def apply_theme(self):
         theme=self.settings.get('theme','Automático').lower(); minutes=datetime.datetime.now().hour*60+datetime.datetime.now().minute
         dark=theme in ('oscuro','dark') or (theme in ('automático','automatico','auto') and not 330<=minutes<1110)
@@ -326,7 +339,10 @@ class MainWindow(QMainWindow):
         i=self.find(path)
         if not i:return
         i.state=d.get('status','Comprimiendo'); self.refresh_row(i); r=self.rows[path]; r['progress'].setValue(int(d['percent'])); eta=fmt_time(d.get('eta')) if d.get('eta') is not None else 'calculando'; r['detail'].setText(f"Pasada {d.get('pass_number',1)}/2  ·  {d['percent']:.1f}%  ·  ETA {eta}  ·  {d.get('speed',0):.2f}×")
-        self.status.setText(f'{Path(path).name} · {i.state}'); self.total_progress.setValue(int((self.completed_count+d['percent']/100)/max(1,self.total_count)*100))
+        stage='Análisis' if d.get('pass_number',1)==1 else 'Compresión'
+        r['detail'].setText(f"{stage} · etapa {d.get('pass_number',1)}/2 · {d['percent']:.1f}% · ETA etapa {eta}" if not i.state.startswith('Pausado') else i.state)
+        self.disk_paused=d.get('disk_paused',False)
+        self.status.setText(f"Cola · video {min(self.completed_count+1,self.total_count)} de {self.total_count} · {i.state}"); self.total_progress.setValue(int((self.completed_count+d['percent']/100)/max(1,self.total_count)*100))
     def on_result(self,path,state,value):
         i=self.find(path)
         if not i:return
@@ -340,7 +356,7 @@ class MainWindow(QMainWindow):
         for i in self.items:self.refresh_row(i)
     def pause(self):
         if self.control:
-            self.paused=not self.paused; self.control.pause() if self.paused else self.control.resume(); self.pause_btn.setText('Reanudar' if self.paused else 'Pausar'); self.status.setText('Pausado' if self.paused else 'Comprimiendo')
+            self.paused=not self.paused; self.control.pause() if self.paused else self.control.resume(); self.pause_btn.setText('Reanudar' if self.paused else 'Pausar'); self.status.setText('Pausado: espacio insuficiente' if getattr(self,'disk_paused',False) else 'Pausa manual' if self.paused else 'Procesando cola')
     def stop(self):
         self.stop_event.set()
         if self.control:self.control.cancel()
@@ -441,7 +457,7 @@ def main():
     if os.name=='nt':
         import ctypes
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID('FloresRoldanLuis.MBCompresorVideoIA')
-    application=QApplication(sys.argv); application.setApplicationName('MB Compresor Pro'); application.setStyle('Fusion')
+    application=QApplication(sys.argv); application.setApplicationName('MB Comprensor de Video IA'); application.setStyle('Fusion')
     application.setWindowIcon(QIcon(str(Path(__file__).resolve().parent/'assets'/'app-logo-02.ico')))
     window=MainWindow();window.show()
     if len(sys.argv)>2 and sys.argv[1]=='--smoke-test':

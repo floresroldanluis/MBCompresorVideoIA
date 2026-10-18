@@ -18,6 +18,10 @@ def icon_button(kind,description,callback):
             a=n*math.pi/16;r=17 if n%4 in (1,2) else 13
             points.append(QPointF(24+r*math.cos(a),24+r*math.sin(a)))
         p.drawPolygon(QPolygonF(points));p.drawEllipse(QPointF(24,24),5,5)
+    elif kind=='broom':
+        p.drawLine(29,9,20,26)
+        p.drawPolygon(QPolygonF([QPointF(15,24),QPointF(27,30),QPointF(22,41),QPointF(8,34)]))
+        p.drawLine(17,29,12,36);p.drawLine(22,32,18,39)
     elif kind=='close':
         p.drawLine(16,16,32,32);p.drawLine(32,16,16,32)
     else:
@@ -42,15 +46,22 @@ def show_popup(dialog,parent):
 
 class AboutDialog(PopupDialog):
     def __init__(self,version,parent=None):
-        super().__init__(parent);self.setWindowTitle('Acerca de MB COMPRENSOR IA');self.resize(520,740)
+        super().__init__(parent);self.setWindowTitle('Acerca de MB Comprensor de Video IA');self.setFixedWidth(420);self.body.setContentsMargins(20,16,20,16);self.body.setSpacing(10)
+        self.body.setAlignment(Qt.AlignTop)
         row=QHBoxLayout();row.addStretch();row.addWidget(icon_button('close','Cerrar',self.reject));self.body.addLayout(row)
         assets=Path(__file__).resolve().parent/'assets'
         for name,size in [('mb-logo-02.png',84)]:
             image=QLabel();image.setAlignment(Qt.AlignCenter);image.setPixmap(QPixmap(str(assets/name)).scaled(size,size,Qt.KeepAspectRatio,Qt.SmoothTransformation));self.body.addWidget(image)
-        for text,style in [(f'VERSIÓN {version}','eyebrow'),('MB COMPRENSOR IA','title'),('Compresor de video personal con alta calidad,\ntamaño controlado y recomendaciones de IA local.','muted')]:
-            l=QLabel(text);l.setObjectName(style);l.setAlignment(Qt.AlignCenter);l.setWordWrap(True);self.body.addWidget(l)
+        identity=QWidget();identity_layout=QVBoxLayout(identity);identity_layout.setContentsMargins(0,0,0,0);identity_layout.setSpacing(6)
+        self.version_label=QLabel(f'VERSIÓN {version}');self.version_label.setObjectName('eyebrow');self.version_label.setAlignment(Qt.AlignCenter);identity_layout.addWidget(self.version_label)
+        self.title_label=QLabel('MB Comprensor de Video IA');self.title_label.setObjectName('aboutTitle');self.title_label.setAlignment(Qt.AlignCenter);self.title_label.setStyleSheet('QLabel#aboutTitle {font-size:16px;font-weight:700;color:#156ff1;}');identity_layout.addWidget(self.title_label)
+        self.body.addWidget(identity)
+        description=QLabel('Compresor de video personal con alta calidad,\ntamaño controlado y recomendaciones de IA local.');description.setObjectName('muted');description.setAlignment(Qt.AlignCenter);description.setWordWrap(True);self.body.addWidget(description)
         self.qr=QLabel();self.qr.setObjectName('aboutQr');self.qr.setAccessibleName('Código QR de Linktree de Luis Flores Roldán');self.qr.setAlignment(Qt.AlignCenter);self.qr.setFixedSize(196,196)
         self.qr.setStyleSheet('QLabel#aboutQr {background:white;border:1px solid #d9e1ee;border-radius:20px;padding:16px;}')
         self.qr.setPixmap(QPixmap(str(assets/'about-qr.png')).scaled(162,162,Qt.KeepAspectRatio,Qt.SmoothTransformation));self.body.addWidget(self.qr,alignment=Qt.AlignCenter)
         self.link=QLabel('<a style="color:#156ff1;font-weight:600" href="https://linktr.ee/floresroldanluis">https://linktr.ee/floresroldanluis</a>');self.link.setOpenExternalLinks(True);self.link.setAlignment(Qt.AlignCenter);self.body.addWidget(self.link)
-        close=QPushButton('Listo');close.setObjectName('primary');close.clicked.connect(self.accept);self.body.addWidget(close)
+
+        self.close_button=QPushButton('Listo');self.close_button.setObjectName('primary');self.close_button.setFixedSize(112,42);self.close_button.clicked.connect(self.accept);self.body.addWidget(self.close_button,alignment=Qt.AlignCenter)
+        if parent:self.setStyleSheet(parent.styleSheet())
+        self.adjustSize()

@@ -86,18 +86,60 @@ def _suspend(proc, pause):
         import signal
         os.kill(proc.pid, signal.SIGSTOP if pause else signal.SIGCONT)
 
-def _run(cmd, control, duration, callback, pass_number, log):
+MIN_FREE_BYTES = 2_000_000_000
+
+class DiskSpaceGuard:
+    def __init__(self, directory, log, interval=1.0):
+        self.directory=Path(directory);self.log=log;self.interval=interval
+        self.paused=False;self.next_check=0.
+    def check(self, control):
+        now=time.monotonic()
+        if now<self.next_check:return self.paused
+        self.next_check=now+self.interval
+        try:free=shutil.disk_usage(self.directory).free
+        except OSError as exc:raise EncodeError('No se pudo comprobar el espacio del disco de salida.') from exc
+        low=free<MIN_FREE_BYTES
+        if low!=self.paused:
+            self.paused=low
+            if low:self.log(f'Pausa automática: quedan {free/1e9:.2f} GB libres en {self.directory.anchor}; se requieren al menos 2 GB. Se reanudará al liberar espacio.')
+            elif control.paused.is_set():self.log(f'Espacio recuperado: {free/1e9:.2f} GB libres. Se mantiene la pausa manual.')
+            else:self.log(f'Espacio recuperado: {free/1e9:.2f} GB libres. Reanudando automáticamente la compresión.')
+        return self.paused
+
+def _hide_work_directory(directory, log):
+    if os.name=='nt':
+        kernel=ctypes.WinDLL('kernel32',use_last_error=True)
+        kernel.GetFileAttributesW.argtypes=[ctypes.c_wchar_p];kernel.GetFileAttributesW.restype=ctypes.c_uint32
+        kernel.SetFileAttributesW.argtypes=[ctypes.c_wchar_p,ctypes.c_uint32];kernel.SetFileAttributesW.restype=ctypes.c_int
+        attributes=kernel.GetFileAttributesW(str(directory))
+        if attributes==0xffffffff or not kernel.SetFileAttributesW(str(directory),attributes|2):
+            log('No se pudo ocultar la carpeta temporal; la compresión puede continuar.')
+
+def _run(cmd, control, duration, callback, pass_number, log, space_guard=None):
+    notified=False
+    while space_guard and space_guard.check(control):
+        if control.cancelled.is_set():raise EncodeCancelled('Compresión cancelada.')
+        if callback and not notified:
+            callback(dict(percent=(pass_number-1)*50,speed=0,eta=None,pass_number=pass_number,status='Pausado: espacio insuficiente',disk_paused=True));notified=True
+        control.cancelled.wait(.15)
+    if control.cancelled.is_set():raise EncodeCancelled('Compresión cancelada.')
     lines=queue.Queue(); tail=[]
     proc=subprocess.Popen(cmd, stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,encoding='utf-8',errors='replace', **_flags())
     def reader():
         for line in proc.stdout: lines.put(line.rstrip())
         lines.put(None)
-    threading.Thread(target=reader,daemon=True).start(); suspended=False; speed=0.; seconds=0.
+    threading.Thread(target=reader,daemon=True).start(); suspended=False; speed=0.; seconds=0.;last_status=None
+    def report(status):
+        if callback:callback(dict(percent=min(99.5,((pass_number-1)+seconds/duration)*50),speed=0 if suspended else speed,eta=None if suspended else max(0,duration-seconds)/speed if speed>0 else None,pass_number=pass_number,status=status,disk_paused=bool(space_guard and space_guard.paused)))
     try:
         while True:
             if control.cancelled.is_set(): raise EncodeCancelled('Compresión cancelada.')
-            if control.paused.is_set()!=suspended:
-                _suspend(proc,control.paused.is_set()); suspended=control.paused.is_set()
+            disk_paused=space_guard.check(control) if space_guard else False
+            desired_pause=control.paused.is_set() or disk_paused
+            if desired_pause!=suspended and proc.poll() is None:
+                _suspend(proc,desired_pause); suspended=desired_pause
+            status='Pausado: espacio insuficiente' if disk_paused else 'Pausado' if control.paused.is_set() else 'Analizando video' if pass_number==1 else 'Comprimiendo'
+            if status!=last_status:report(status);last_status=status
             try: line=lines.get(timeout=.15)
             except queue.Empty:
                 if proc.poll() is not None: break
@@ -110,7 +152,7 @@ def _run(cmd, control, duration, callback, pass_number, log):
             if line.startswith('out_time_us='):
                 try: seconds=float(line.split('=',1)[1])/1e6
                 except ValueError: continue
-                if callback: callback(dict(percent=min(99.5,((pass_number-1)+seconds/duration)*50),speed=speed,eta=max(0,duration-seconds)/speed if speed>0 else None,pass_number=pass_number,status='Pausado' if suspended else 'Comprimiendo'))
+                report(status)
         if proc.wait(): raise EncodeError('\n'.join(tail)[-5000:])
     finally:
         if proc.poll() is None:
@@ -182,9 +224,12 @@ def compress(source, output_dir, options, control=None, progress=None, log=None,
     codec='libx264' if options.codec=='h264' else 'libx265'
     with tempfile.TemporaryDirectory(prefix='.mb-compress-',dir=out) as temp:
         temp=Path(temp); result=temp/'result.mp4'; stats=temp/'pass'
+        _hide_work_directory(temp,log)
+        space_guard=DiskSpaceGuard(out,log)
         for attempt in range(4):
             log(f'Intento {attempt+1}: {bitrate//1000} kb/s, dos pasadas.')
             for pn in (1,2):
+                log('Etapa 1/2: análisis del video para distribuir la calidad.' if pn==1 else 'Etapa 2/2: compresión y creación del MP4.')
                 cmd=[ffmpeg,'-hide_banner','-y','-nostdin','-loglevel','warning','-ss',str(start),'-i',str(source),'-t',str(duration)]
                 if bitmap_burn:
                     cmd+=['-filter_complex',f"[0:{info['video']['index']}][0:{subs[0]['index']}]overlay=eof_action=pass,{vf}[v]",'-map','[v]']
@@ -200,7 +245,7 @@ def compress(source, output_dir, options, control=None, progress=None, log=None,
                     if codec=='libx265': cmd+=['-tag:v','hvc1']
                     cmd+=[str(result)]
                 cmd[1:1]=['-progress','pipe:1','-stats_period','0.3']
-                _run(cmd,control,duration,progress,pn,log)
+                _run(cmd,control,duration,progress,pn,log,space_guard)
             actual=result.stat().st_size
             if actual<=cap: break
             bitrate=int(bitrate*cap/actual*.93); log('Se ajustará el bitrate para cumplir el tamaño máximo.')
