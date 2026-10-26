@@ -1,15 +1,15 @@
-#define AppVersion "1.0.24"
+#define AppVersion "1.0.39"
 [Setup]
 AppId={{C52EF970-71D0-42E7-93CD-29D96781F120}
-AppName=MB Comprensor de Video IA
+AppName=MB Compresor de Video IA
 AppVersion={#AppVersion}
-AppPublisher=Luis Flores Roldán
+AppPublisher=Azvl
 AppPublisherURL=https://linktr.ee/floresroldanluis
 AppSupportURL=https://github.com/floresroldanluis/MBCompresorVideoIA
 DefaultDirName={autopf}\MBCompresorVideo
 UsePreviousAppDir=no
 UsePreviousPrivileges=no
-DefaultGroupName=MB Comprensor de Video IA
+DefaultGroupName=MB Compresor de Video IA
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=commandline
 ArchitecturesAllowed=x64compatible
@@ -34,42 +34,83 @@ Compression=lzma2/fast
 SolidCompression=yes
 CloseApplications=yes
 RestartApplications=no
-UninstallDisplayName=MB Comprensor de Video IA
+UninstallDisplayName=MB Compresor de Video IA
 VersionInfoDescription=Instalador de MB Compresor de Video IA
+VersionInfoCompany=Azvl
 
 [Languages]
 Name: "spanish"; MessagesFile: "compiler:Languages\Spanish.isl"
 
 [Messages]
-spanish.SetupWindowTitle=Instalación de MB Comprensor de Video IA
+spanish.SetupWindowTitle=Instalación de MB Compresor de Video IA
 spanish.SelectDirBrowseLabel=Si deseas cambiar la carpeta, pulsa Examinar. Pulsa Instalar para comenzar.
 spanish.WelcomeLabel1=Menos tamaño. Más posibilidades.
-spanish.WelcomeLabel2=Comprime tus videos a MP4 con alta calidad y control de tamaño.%n%nIncluye los motores de conversión. IA local opcional con Ollama.%n%nPulsa Siguiente para comenzar.
+spanish.WelcomeLabel2=Comprime tus videos a MP4 con alta calidad y control de tamaño.%n%nIncluye los motores de conversión. IA local opcional con Ollama.
 spanish.FinishedHeadingLabel=Todo listo para comprimir
-spanish.FinishedLabel=MB Comprensor de Video IA ya está instalado.%n%nAgrega tus videos, elige el tamaño máximo y comienza a comprimir. Por defecto, los archivos se guardan junto al video original.
+spanish.FinishedLabel=MB Compresor de Video IA ya está instalado.%n%nAgrega tus videos, elige el tamaño máximo y comienza a comprimir. Por defecto, los archivos se guardan junto al video original.
 
 [Files]
 Source: "Aplicacion\MB Compresor Pro\*"; DestDir: "{app}\versions\{#AppVersion}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{autoprograms}\MB Comprensor de Video IA"; Filename: "{app}\versions\{#AppVersion}\MB Compresor Pro.exe"; WorkingDir: "{app}\versions\{#AppVersion}"; IconFilename: "{app}\versions\{#AppVersion}\MB Compresor Pro.exe"; AppUserModelID: "FloresRoldanLuis.MBCompresorVideoIA"
-Name: "{autodesktop}\MB Comprensor de Video IA"; Filename: "{app}\versions\{#AppVersion}\MB Compresor Pro.exe"; WorkingDir: "{app}\versions\{#AppVersion}"; IconFilename: "{app}\versions\{#AppVersion}\MB Compresor Pro.exe"; AppUserModelID: "FloresRoldanLuis.MBCompresorVideoIA"
+Name: "{autoprograms}\MB Compresor de Video IA"; Filename: "{app}\versions\{#AppVersion}\MB Compresor Pro.exe"; WorkingDir: "{app}\versions\{#AppVersion}"; IconFilename: "{app}\versions\{#AppVersion}\MB Compresor Pro.exe"; AppUserModelID: "FloresRoldanLuis.MBCompresorVideoIA"
+Name: "{autodesktop}\MB Compresor de Video IA"; Filename: "{app}\versions\{#AppVersion}\MB Compresor Pro.exe"; WorkingDir: "{app}\versions\{#AppVersion}"; IconFilename: "{app}\versions\{#AppVersion}\MB Compresor Pro.exe"; AppUserModelID: "FloresRoldanLuis.MBCompresorVideoIA"
 
 [InstallDelete]
+Type: files; Name: "{autodesktop}\MB Comprensor de Video IA.lnk"
+Type: files; Name: "{autoprograms}\MB Comprensor de Video IA.lnk"
 Type: files; Name: "{autodesktop}\MB COMPRENSOR IA.lnk"
 Type: files; Name: "{autoprograms}\MB COMPRENSOR IA.lnk"
 
 [Run]
-Filename: "{app}\versions\{#AppVersion}\MB Compresor Pro.exe"; Description: "Abrir MB Comprensor de Video IA"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\versions\{#AppVersion}\MB Compresor Pro.exe"; Description: "Abrir MB Compresor de Video IA"; Flags: nowait postinstall skipifsilent
 
 [Code]
 function CopyInstallerFile(ExistingFile, NewFile: String; FailIfExists: Boolean): Boolean;
   external 'CopyFileW@kernel32.dll stdcall';
+function AnimateInstallerWindow(Window: HWND; Duration, Flags: LongWord): Boolean;
+  external 'AnimateWindow@user32.dll stdcall';
+function InstallerWindowVisible(Window: HWND): Boolean;
+  external 'IsWindowVisible@user32.dll stdcall';
+function ShowInstallerWindow(Window: HWND; Command: Integer): Boolean;
+  external 'ShowWindow@user32.dll stdcall';
 
 var
   ScopePage: TInputOptionWizardPage;
   ScopePathLabel: TNewStaticText;
   Relaunching: Boolean;
+  PreviousWizardShow: TNotifyEvent;
+  PreviousWizardClose: TCloseEvent;
+
+procedure InstallerShown(Sender: TObject);
+var
+  Animated: Boolean;
+begin
+  if (PreviousWizardShow <> nil) then PreviousWizardShow(Sender);
+  if WizardSilent then Exit;
+  if InstallerWindowVisible(WizardForm.Handle) then ShowInstallerWindow(WizardForm.Handle, 0);
+  Animated := AnimateInstallerWindow(WizardForm.Handle, 260, $00080000);
+  Log('Installer fade-in 260ms: ' + IntToStr(Ord(Animated)));
+  if not Animated then ShowInstallerWindow(WizardForm.Handle, SW_SHOWNORMAL);
+end;
+
+procedure FadeInstallerOut;
+var
+  Animated: Boolean;
+begin
+  if WizardSilent then Exit;
+  if InstallerWindowVisible(WizardForm.Handle) then
+  begin
+    Animated := AnimateInstallerWindow(WizardForm.Handle, 220, $00090000);
+    Log('Installer fade-out 220ms: ' + IntToStr(Ord(Animated)));
+  end;
+end;
+
+procedure InstallerClosing(Sender: TObject; var Action: TCloseAction);
+begin
+  if (PreviousWizardClose <> nil) then PreviousWizardClose(Sender, Action);
+  if Action <> caNone then FadeInstallerOut;
+end;
 
 function ScopeDirectory: String;
 begin
@@ -90,6 +131,10 @@ end;
 
 procedure InitializeWizard;
 begin
+  PreviousWizardShow := WizardForm.OnShow;
+  PreviousWizardClose := WizardForm.OnClose;
+  WizardForm.OnShow := @InstallerShown;
+  WizardForm.OnClose := @InstallerClosing;
   ScopePage := CreateInputOptionPage(wpWelcome, '¿Quién puede usar esta aplicación?',
     'Selecciona el tipo de instalación.',
     'Elige si deseas instalar para todos los usuarios o solo para tu cuenta.', True, False);
@@ -129,6 +174,7 @@ var
   Verb: String;
 begin
   Result := True;
+  if CurPageID = wpFinished then begin FadeInstallerOut; Exit; end;
   if CurPageID <> ScopePage.ID then Exit;
   if ((ScopePage.SelectedValueIndex = 0) and IsAdminInstallMode) or
      ((ScopePage.SelectedValueIndex = 1) and not IsAdminInstallMode) then Exit;
@@ -145,6 +191,7 @@ begin
     Exit;
   end;
   if ScopePage.SelectedValueIndex = 0 then Verb := 'runas' else Verb := '';
+  FadeInstallerOut;
   WizardForm.Hide;
   if ShellExec(Verb, HandoffExe, Params, '', SW_SHOWNORMAL,
     ewWaitUntilTerminated, ErrorCode) then
@@ -163,5 +210,11 @@ end;
 
 procedure CancelButtonClick(CurPageID: Integer; var Cancel, Confirm: Boolean);
 begin
-  if Relaunching then begin Cancel := True; Confirm := False; end;
+  if Relaunching then begin Cancel := True; Confirm := False; Exit; end;
+  if Confirm and not WizardSilent then
+  begin
+    Cancel := SuppressibleMsgBox(SetupMessage(msgExitSetupMessage), mbConfirmation, MB_YESNO, IDNO) = IDYES;
+    Confirm := False;
+  end;
+  if Cancel then FadeInstallerOut;
 end;

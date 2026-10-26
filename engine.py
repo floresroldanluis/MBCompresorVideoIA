@@ -55,7 +55,9 @@ def probe(path, ffprobe=None):
 
 @dataclass
 class CompressionOptions:
+    mode: str='auto'
     max_gb: float=1.95
+    unlimited: bool=False
     codec: str='h264'
     speed: str='calidad'
     height: int|None=1080
@@ -115,12 +117,12 @@ def _hide_work_directory(directory, log):
         if attributes==0xffffffff or not kernel.SetFileAttributesW(str(directory),attributes|2):
             log('No se pudo ocultar la carpeta temporal; la compresión puede continuar.')
 
-def _run(cmd, control, duration, callback, pass_number, log, space_guard=None):
+def _run(cmd, control, duration, callback, pass_number, log, space_guard=None, total_passes=2, backend='cpu'):
     notified=False
     while space_guard and space_guard.check(control):
         if control.cancelled.is_set():raise EncodeCancelled('Compresión cancelada.')
         if callback and not notified:
-            callback(dict(percent=(pass_number-1)*50,speed=0,eta=None,pass_number=pass_number,status='Pausado: espacio insuficiente',disk_paused=True));notified=True
+            callback(dict(percent=(pass_number-1)*100/total_passes,speed=0,eta=None,pass_number=pass_number,total_passes=total_passes,backend=backend,status='Pausado: espacio insuficiente',disk_paused=True));notified=True
         control.cancelled.wait(.15)
     if control.cancelled.is_set():raise EncodeCancelled('Compresión cancelada.')
     lines=queue.Queue(); tail=[]
@@ -130,7 +132,7 @@ def _run(cmd, control, duration, callback, pass_number, log, space_guard=None):
         lines.put(None)
     threading.Thread(target=reader,daemon=True).start(); suspended=False; speed=0.; seconds=0.;last_status=None
     def report(status):
-        if callback:callback(dict(percent=min(99.5,((pass_number-1)+seconds/duration)*50),speed=0 if suspended else speed,eta=None if suspended else max(0,duration-seconds)/speed if speed>0 else None,pass_number=pass_number,status=status,disk_paused=bool(space_guard and space_guard.paused)))
+        if callback:callback(dict(percent=min(99.5,((pass_number-1)+seconds/duration)*100/total_passes),speed=0 if suspended else speed,eta=None if suspended else max(0,duration-seconds)/speed if speed>0 else None,pass_number=pass_number,total_passes=total_passes,backend=backend,status=status,disk_paused=bool(space_guard and space_guard.paused)))
     try:
         while True:
             if control.cancelled.is_set(): raise EncodeCancelled('Compresión cancelada.')
@@ -138,7 +140,7 @@ def _run(cmd, control, duration, callback, pass_number, log, space_guard=None):
             desired_pause=control.paused.is_set() or disk_paused
             if desired_pause!=suspended and proc.poll() is None:
                 _suspend(proc,desired_pause); suspended=desired_pause
-            status='Pausado: espacio insuficiente' if disk_paused else 'Pausado' if control.paused.is_set() else 'Analizando video' if pass_number==1 else 'Comprimiendo'
+            status='Pausado: espacio insuficiente' if disk_paused else 'Pausado' if control.paused.is_set() else 'Analizando video' if pass_number==1 and total_passes==2 else 'Comprimiendo'
             if status!=last_status:report(status);last_status=status
             try: line=lines.get(timeout=.15)
             except queue.Empty:
@@ -166,10 +168,19 @@ def compress(source, output_dir, options, control=None, progress=None, log=None,
     control=control or Control(); log=log or (lambda message: None)
     ffmpeg=ffmpeg or discover_tools()[0]
     if not ffmpeg: raise EncodeError('No se encontró FFmpeg.')
+    if options.mode not in ('auto','nvidia','cpu'):raise EncodeError('Modo de compresión no válido.')
+    primary_ffmpeg=ffmpeg;backend='cpu'
+    if options.mode!='cpu':
+        from acceleration import find_nvenc
+        status=find_nvenc(ffmpeg,options.codec)
+        if status['available']:ffmpeg=status['path'];backend='nvidia'
+        elif options.mode=='nvidia':raise EncodeError('NVIDIA no está disponible. Usa Actualizar motores o Reparar FFmpeg. '+status['error'])
+        else:log('Automático: NVIDIA no está disponible; se usará CPU. '+status['error'])
+    log(('NVIDIA NVENC: codificación por GPU con alta calidad.' if backend=='nvidia' else 'CPU: codificación de dos pasadas para priorizar calidad por tamaño.'))
     info=probe(source,ffprobe); source=Path(source).resolve(); out=Path(output_dir).resolve(); out.mkdir(parents=True,exist_ok=True)
     if options.codec not in ('h264','h265'): raise EncodeError('Códec no válido.')
-    if not math.isfinite(options.max_gb) or options.max_gb<=0: raise EncodeError('El límite de tamaño debe ser positivo.')
-    cap=int(options.max_gb*1_000_000_000)
+    if not options.unlimited and (not math.isfinite(options.max_gb) or options.max_gb<=0): raise EncodeError('El límite de tamaño debe ser positivo.')
+    cap=None if options.unlimited else int(options.max_gb*1_000_000_000)
     output_name=options.output_name
     if output_name is not None:
         output_name=output_name.strip()
@@ -193,14 +204,18 @@ def compress(source, output_dir, options, control=None, progress=None, log=None,
     if burn and len(subs)!=1: raise EncodeError('Elige una sola pista para incrustar en la imagen.')
     if not burn and any(s.get('codec_name') not in text_subs for s in subs): raise EncodeError('Los subtítulos de imagen requieren el modo incrustado.')
     audio_rate=min(max(32,int(options.audio_kbps)),512)*1000
-    budget=cap*8/duration*.95
-    if audio: audio_rate=min(audio_rate,int(budget*.25/len(audio)))
-    if audio and audio_rate<24000: raise EncodeError('El límite es demasiado pequeño para conservar las pistas de audio.')
-    bitrate=int(budget-audio_rate*len(audio))
-    if bitrate<20000: raise EncodeError('El límite de tamaño es demasiado pequeño para este video.')
+    bitrate=0
+    if not options.unlimited:
+        budget=cap*8/duration*.95
+        if audio: audio_rate=min(audio_rate,int(budget*.25/len(audio)))
+        if audio and audio_rate<24000: raise EncodeError('El límite es demasiado pequeño para conservar las pistas de audio.')
+        bitrate=int(budget-audio_rate*len(audio))
+        if bitrate<20000: raise EncodeError('El límite de tamaño es demasiado pequeño para este video.')
+    else:
+        log('Sin límite de tamaño: calidad visual alta (CRF/CQ 18), sin reducir bitrate para alcanzar GB. El tamaño final depende del contenido.')
     height=min(info['height'],options.height or info['height']); width=info['width']
     if height<2: raise EncodeError('Resolución no válida.')
-    if options.local_ai:
+    if options.local_ai and not options.unlimited:
         # Offline adaptive bitrate-per-pixel heuristic; explicitly not a neural model.
         fps=info['video'].get('avg_frame_rate','30/1')
         try:
@@ -220,34 +235,61 @@ def compress(source, output_dir, options, control=None, progress=None, log=None,
         relative=next(i for i,s in enumerate(info['subtitles']) if s['index']==subs[0]['index'])
         vf=f"subtitles=filename='{escaped}':si={relative},"+vf
     preset={'rapido':'veryfast','equilibrado':'medium','calidad':'slow'}.get(options.speed,options.speed)
+    if options.mode=='cpu':preset='slow'
     if preset not in ('ultrafast','superfast','veryfast','faster','fast','medium','slow','slower','veryslow'): raise EncodeError('Velocidad no válida.')
-    codec='libx264' if options.codec=='h264' else 'libx265'
     with tempfile.TemporaryDirectory(prefix='.mb-compress-',dir=out) as temp:
         temp=Path(temp); result=temp/'result.mp4'; stats=temp/'pass'
         _hide_work_directory(temp,log)
         space_guard=DiskSpaceGuard(out,log)
         for attempt in range(4):
-            log(f'Intento {attempt+1}: {bitrate//1000} kb/s, dos pasadas.')
-            for pn in (1,2):
-                log('Etapa 1/2: análisis del video para distribuir la calidad.' if pn==1 else 'Etapa 2/2: compresión y creación del MP4.')
-                cmd=[ffmpeg,'-hide_banner','-y','-nostdin','-loglevel','warning','-ss',str(start),'-i',str(source),'-t',str(duration)]
-                if bitmap_burn:
-                    cmd+=['-filter_complex',f"[0:{info['video']['index']}][0:{subs[0]['index']}]overlay=eof_action=pass,{vf}[v]",'-map','[v]']
-                else: cmd+=['-map',f"0:{info['video']['index']}",'-vf',vf]
-                cmd+=['-c:v',codec,'-preset',preset,'-b:v',str(bitrate)]
-                if codec=='libx264': cmd+=['-pass',str(pn),'-passlogfile',str(stats)]
-                else: cmd+=['-x265-params',f'pass={pn}:stats={stats.as_posix().replace(":", "\\:")}']
-                if pn==1: cmd+=['-an','-sn','-f','null',os.devnull]
-                else:
-                    for s in audio+([] if burn else subs): cmd+=['-map',f"0:{s['index']}"]
-                    cmd+=['-c:a','aac','-b:a',str(audio_rate),'-c:s','mov_text','-map_metadata','0','-movflags','+faststart']
-                    if options.downmix_audio: cmd+=['-ac','2']
-                    if codec=='libx265': cmd+=['-tag:v','hvc1']
-                    cmd+=[str(result)]
-                cmd[1:1]=['-progress','pipe:1','-stats_period','0.3']
-                _run(cmd,control,duration,progress,pn,log,space_guard)
+            gpu=backend=='nvidia';total_passes=1 if gpu or options.unlimited else 2
+            codec=('h264_nvenc' if options.codec=='h264' else 'hevc_nvenc') if gpu else ('libx264' if options.codec=='h264' else 'libx265')
+            log(f'Intento {attempt+1}: '+('calidad constante · ' if options.unlimited else f'{bitrate//1000} kb/s · ')+('NVIDIA, una codificación con análisis interno.' if gpu else 'CPU, calidad constante.' if options.unlimited else 'CPU, dos pasadas.'))
+            try:
+                for pn in range(1,total_passes+1):
+                    first_analysis=not gpu and not options.unlimited and pn==1
+                    log('Compresión NVIDIA: GPU con análisis adaptativo de calidad.' if gpu else 'Compresión CPU: calidad constante sin límite de tamaño.' if options.unlimited else 'Etapa 1/2: análisis del video para distribuir la calidad.' if pn==1 else 'Etapa 2/2: compresión y creación del MP4.')
+                    cmd=[ffmpeg,'-hide_banner','-y','-nostdin','-loglevel','warning','-ss',str(start),'-i',str(source)]
+                    if not options.unlimited or options.trim_end is not None:cmd+=['-t',str(duration)]
+                    if bitmap_burn:
+                        cmd+=['-filter_complex',f"[0:{info['video']['index']}][0:{subs[0]['index']}]overlay=eof_action=pass,{vf}[v]",'-map','[v]']
+                    else: cmd+=['-map',f"0:{info['video']['index']}",'-vf',vf]
+                    if gpu:
+                        gpu_preset={'rapido':'p4','equilibrado':'p5','calidad':'p6'}.get(options.speed,'p5')
+                        cmd+=['-c:v',codec,'-preset',gpu_preset,'-tune','hq','-rc','vbr','-cq','18' if options.unlimited else '19','-b:v','0' if options.unlimited else str(bitrate)]
+                        if not options.unlimited:cmd+=['-maxrate',str(int(bitrate*1.5)),'-bufsize',str(bitrate*2)]
+                        cmd+=['-multipass','qres','-spatial-aq','1','-aq-strength','8','-rc-lookahead','20','-bf','3']
+                    else:
+                        cmd+=['-c:v',codec,'-preset',preset]
+                        if options.unlimited:cmd+=['-crf','18']
+                        else:cmd+=['-b:v',str(bitrate)]
+                        if not options.unlimited and codec=='libx264':cmd+=['-pass',str(pn),'-passlogfile',str(stats)]
+                        elif not options.unlimited:cmd+=['-x265-params',f'pass={pn}:stats={stats.as_posix().replace(":", "\\:")}']
+                    if first_analysis:cmd+=['-an','-sn','-f','null',os.devnull]
+                    else:
+                        for s in audio+([] if burn else subs): cmd+=['-map',f"0:{s['index']}"]
+                        cmd+=['-c:a','aac','-b:a',str(audio_rate),'-c:s','mov_text','-map_metadata','0','-movflags','+faststart']
+                        if options.downmix_audio:cmd+=['-ac','2']
+                        if options.unlimited and not options.downmix_audio:
+                            for index,stream in enumerate(audio):
+                                if stream.get('codec_name') in ('aac','ac3','eac3','alac','mp3'):
+                                    cmd+=['-c:a:'+str(index),'copy']
+                                    log('Audio '+str(stream['index'])+': copia sin recodificar.')
+                                else:
+                                    cmd+=['-c:a:'+str(index),'alac']
+                                    log('Audio '+str(stream['index'])+': ALAC sin pérdida adicional para MP4.')
+                        if options.codec=='h265':cmd+=['-tag:v','hvc1']
+                        cmd+=[str(result)]
+                    cmd[1:1]=['-progress','pipe:1','-stats_period','0.3']
+                    _run(cmd,control,duration,progress,pn,log,space_guard,total_passes,backend)
+            except EncodeCancelled:raise
+            except EncodeError as exc:
+                if gpu and options.mode=='auto':
+                    log('Automático: falló NVIDIA; se reintentará con CPU. '+str(exc)[-500:])
+                    backend='cpu';ffmpeg=primary_ffmpeg;continue
+                raise
             actual=result.stat().st_size
-            if actual<=cap: break
+            if options.unlimited or actual<=cap: break
             bitrate=int(bitrate*cap/actual*.93); log('Se ajustará el bitrate para cumplir el tamaño máximo.')
             if bitrate<10000: raise EncodeError('El límite solicitado no permite una salida válida.')
         else: raise EncodeError('No se alcanzó el tamaño máximo; no se publicó ningún archivo.')
@@ -261,7 +303,7 @@ def compress(source, output_dir, options, control=None, progress=None, log=None,
             except FileExistsError: continue
             try: os.replace(result,target)
             except BaseException: target.unlink(missing_ok=True); raise
-            if progress: progress(dict(percent=100,speed=0,eta=0,pass_number=2,status='Completado'))
+            if progress: progress(dict(percent=100,speed=0,eta=0,pass_number=total_passes,total_passes=total_passes,backend=backend,status='Completado'))
             log(f'Guardado: {target.name} ({actual/1e6:.2f} MB).')
             return target
         raise EncodeError('No se pudo elegir un nombre de salida libre.')

@@ -4,7 +4,7 @@ $pythonPath=Join-Path $projectRoot '.venv\Scripts\python.exe'
 $distRoot=Join-Path $projectRoot 'Aplicacion'
 $buildRoot=Join-Path $projectRoot '.build'
 $assetRoot=Join-Path $projectRoot 'assets'
-& $pythonPath -m PyInstaller --noconfirm --windowed --onedir --name 'MB Compresor Pro' --icon (Join-Path $assetRoot 'app-logo-02.ico') --add-data ($assetRoot+';assets') --hidden-import settings_dialog --hidden-import local_ai --hidden-import popups --exclude-module telethon --exclude-module yt_dlp --exclude-module PySide6.QtWebEngineCore --exclude-module PySide6.QtWebEngineWidgets --exclude-module PySide6.QtPdf --distpath $distRoot --workpath $buildRoot --specpath $buildRoot (Join-Path $projectRoot 'app.py')
+& $pythonPath -m PyInstaller --noconfirm --windowed --onedir --name 'MB Compresor Pro' --icon (Join-Path $assetRoot 'app-logo-02.ico') --add-data ($assetRoot+';assets') --hidden-import settings_dialog --hidden-import local_ai --hidden-import popups --hidden-import acceleration --exclude-module telethon --exclude-module yt_dlp --exclude-module PySide6.QtWebEngineCore --exclude-module PySide6.QtWebEngineWidgets --exclude-module PySide6.QtPdf --distpath $distRoot --workpath $buildRoot --specpath $buildRoot (Join-Path $projectRoot 'app.py')
 if($LASTEXITCODE -ne 0){throw 'La compilación falló.'}
 $packageRoot=Join-Path $distRoot 'MB Compresor Pro'
 # Qt 6.12 uses the Windows system ICU interface. An unrelated ICU from PATH
@@ -13,5 +13,9 @@ $foreignIcu=Join-Path $packageRoot '_internal\icuuc.dll'
 if(Test-Path -LiteralPath $foreignIcu){Remove-Item -LiteralPath $foreignIcu}
 New-Item -ItemType Directory -Force -Path (Join-Path $packageRoot 'tools') | Out-Null
 foreach($toolName in @('ffmpeg.exe','ffprobe.exe')){Copy-Item -LiteralPath (Join-Path $projectRoot ('tools\'+$toolName)) -Destination (Join-Path $packageRoot 'tools') -Force}
+$nvenc=Join-Path $projectRoot 'tools\nvenc\ffmpeg.exe'
+if(-not(Test-Path -LiteralPath $nvenc)){throw 'Falta el complemento NVIDIA verificado en tools\nvenc\ffmpeg.exe.'}
+New-Item -ItemType Directory -Path (Join-Path $packageRoot 'tools\nvenc') -Force | Out-Null
+Copy-Item -LiteralPath $nvenc -Destination (Join-Path $packageRoot 'tools\nvenc\ffmpeg.exe') -Force
 Copy-Item -LiteralPath (Join-Path $projectRoot 'LEEME.md') -Destination $packageRoot -Force
 Write-Output 'Aplicación compilada. Ejecuta Instalar.ps1 para actualizar la instalación local.'

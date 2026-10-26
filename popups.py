@@ -46,7 +46,7 @@ def show_popup(dialog,parent):
 
 class AboutDialog(PopupDialog):
     def __init__(self,version,parent=None):
-        super().__init__(parent);self.setWindowTitle('Acerca de MB Comprensor de Video IA');self.setFixedWidth(420);self.body.setContentsMargins(20,16,20,16);self.body.setSpacing(10)
+        super().__init__(parent);self.setWindowTitle('Acerca de MB Compresor de Video IA');self.setFixedWidth(420);self.body.setContentsMargins(20,16,20,16);self.body.setSpacing(10)
         self.body.setAlignment(Qt.AlignTop)
         row=QHBoxLayout();row.addStretch();row.addWidget(icon_button('close','Cerrar',self.reject));self.body.addLayout(row)
         assets=Path(__file__).resolve().parent/'assets'
@@ -54,7 +54,7 @@ class AboutDialog(PopupDialog):
             image=QLabel();image.setAlignment(Qt.AlignCenter);image.setPixmap(QPixmap(str(assets/name)).scaled(size,size,Qt.KeepAspectRatio,Qt.SmoothTransformation));self.body.addWidget(image)
         identity=QWidget();identity_layout=QVBoxLayout(identity);identity_layout.setContentsMargins(0,0,0,0);identity_layout.setSpacing(6)
         self.version_label=QLabel(f'VERSIÓN {version}');self.version_label.setObjectName('eyebrow');self.version_label.setAlignment(Qt.AlignCenter);identity_layout.addWidget(self.version_label)
-        self.title_label=QLabel('MB Comprensor de Video IA');self.title_label.setObjectName('aboutTitle');self.title_label.setAlignment(Qt.AlignCenter);self.title_label.setStyleSheet('QLabel#aboutTitle {font-size:16px;font-weight:700;color:#156ff1;}');identity_layout.addWidget(self.title_label)
+        self.title_label=QLabel('MB Compresor de Video IA');self.title_label.setObjectName('aboutTitle');self.title_label.setAlignment(Qt.AlignCenter);self.title_label.setStyleSheet('QLabel#aboutTitle {font-size:16px;font-weight:700;color:#156ff1;}');identity_layout.addWidget(self.title_label)
         self.body.addWidget(identity)
         description=QLabel('Compresor de video personal con alta calidad,\ntamaño controlado y recomendaciones de IA local.');description.setObjectName('muted');description.setAlignment(Qt.AlignCenter);description.setWordWrap(True);self.body.addWidget(description)
         self.qr=QLabel();self.qr.setObjectName('aboutQr');self.qr.setAccessibleName('Código QR de Linktree de Luis Flores Roldán');self.qr.setAlignment(Qt.AlignCenter);self.qr.setFixedSize(196,196)

@@ -1,12 +1,12 @@
-# MB Comprensor de Video IA · versión 1.0.24
+# MB Compresor de Video IA · versión 1.0.39
 
 Compresor de video de escritorio para Windows. Su función es transformar videos locales a MP4 de alta calidad, con un tamaño máximo por archivo.
 
 ## Abrir
 
-Usa el acceso directo **MB Comprensor de Video IA** del escritorio.
+Usa el acceso directo **MB Compresor de Video IA** del escritorio.
 
-Aplicación instalada: `%LOCALAPPDATA%\Programs\MBCompresorVideo\versions\1.0.24\MB Compresor Pro.exe`.
+Aplicación instalada: `C:\Users\Luis\AppData\Local\MBCompresorPro\MB Compresor Pro.exe`.
 
 Para abrir su carpeta, presiona **Win + R**, escribe `%LOCALAPPDATA%\MBCompresorPro` y pulsa Enter. También tienes una copia en `Aplicacion/MB Compresor Pro/MB Compresor Pro.exe`; conserva la carpeta completa junto a ese ejecutable.
 
@@ -50,12 +50,22 @@ El código está en app.py, engine.py, settings_dialog.py, local_ai.py y motors.
 En 1.0.4, los motores se gestionan automáticamente: solo aparecen Actualizar motores y Reparar FFmpeg. La comprobación de versiones se realiza al abrir Configuración; ya no hay campos manuales de ejecutables. El acceso directo apunta a la instalación del perfil real de Windows, fuera de las carpetas internas de Codex.
 
 
-En 1.0.5, el título MB Comprensor de Video IA y el subtítulo están centrados. Tema, Configuración y Acerca de usan iconos con ayudas accesibles. Configuración y Acerca de se abren como popups modales centrados con fondo atenuado. Acerca de incluye el logo, QR y enlace de MB Downloader. Se retiraron del paquete los módulos y motores de descarga; Ollama solo se consulta cuando se solicita una recomendación. El valor inicial vuelve a la carpeta del original; una selección posterior de Downloads se conserva.
+En 1.0.5, el título MB Compresor de Video IA y el subtítulo están centrados. Tema, Configuración y Acerca de usan iconos con ayudas accesibles. Configuración y Acerca de se abren como popups modales centrados con fondo atenuado. Acerca de incluye el logo, QR y enlace de MB Downloader. Se retiraron del paquete los módulos y motores de descarga; Ollama solo se consulta cuando se solicita una recomendación. El valor inicial vuelve a la carpeta del original; una selección posterior de Downloads se conserva.
 
 
 
 Para publicar futuras actualizaciones, compila la versión con Construir.ps1 y genera sus archivos con Preparar-Release.ps1 -ReleaseVersion 1.0.6 (cambia la versión cuando corresponda). En el repositorio crea un Release estable con etiqueta v1.0.6 y adjunta el ZIP generado y SHA256SUMS. No subas solo el ejecutable: necesita la carpeta _internal y los motores. El actualizador espera el paquete ZIP de Windows de esta aplicación; un instalador de otro programa no se ejecuta automáticamente. El ZIP y la etiqueta deben corresponder a la versión de app.py. La instalación conserva respaldos en AppData\\Local\\MBCompresorPro\\updates y registra el resultado en last-result.json.
 
 
-La versión 1.0.24 incorpora una transición de aparición al abrir (260 ms) y desvanecimiento al cerrar (220 ms), sin bloquear la interfaz. La cola se guarda antes de cerrar. Si hay una compresión o consulta de IA en curso, el cierre sigue protegido. La instalación de actualizaciones utiliza también este cierre animado antes de reiniciar.
+La versión 1.0.39 incorpora una transición de aparición al abrir (260 ms) y desvanecimiento al cerrar (220 ms), sin bloquear la interfaz. La cola se guarda antes de cerrar. Si hay una compresión o consulta de IA en curso, el cierre sigue protegido. La instalación de actualizaciones utiliza también este cierre animado antes de reiniciar.
 
+
+## Modos de compresión
+
+Automático prueba NVIDIA y usa CPU si no está disponible o falla. NVIDIA rápido con alta calidad usa NVENC H.264/H.265, análisis interno, control de bitrate y verificación del tamaño. CPU para priorizar calidad por tamaño utiliza dos pasadas y preset slow. La calidad y velocidad dependen del contenido y del equipo.
+
+Se incluye FFmpeg 8.0.1 separado para compatibilidad NVENC, además del motor principal. Actualizar motores y Reparar FFmpeg verifican este componente. No se necesita instalar CUDA Toolkit; NVIDIA requiere una GPU y un controlador compatibles.
+
+## Máximo por video sin límite
+
+Activa la casilla junto al máximo con límite para comprimir por calidad visual alta, sin objetivo de GB (CPU CRF 18 o NVIDIA CQ 18). El campo GB queda deshabilitado. Se conserva el audio compatible con MP4 sin recodificar; otros formatos se convierten a ALAC sin pérdida adicional. Si eliges estéreo, se respeta esa conversión. La resolución y FPS seleccionados siguen aplicándose. El video se recodifica con pérdida: no se garantiza identidad con el original ni un archivo más pequeño. La pausa automática por espacio y la cancelación siguen funcionando.

@@ -74,9 +74,7 @@ def _compare(local, remote, name):
 def _latest():
     values, errors = {}, {}
     for name, url in (
-        ('yt-dlp', 'https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest'),
-        ('deno', 'https://api.github.com/repos/denoland/deno/releases/latest'),
-        ('ffmpeg', 'https://www.gyan.dev/ffmpeg/builds/release-version')):
+        ('ffmpeg', 'https://www.gyan.dev/ffmpeg/builds/release-version'),):
         try:
             raw = _read(url).decode()
             values[name] = json.loads(raw)['tag_name'].lstrip('v') if name != 'ffmpeg' else raw.strip()
@@ -93,7 +91,7 @@ def inspect_motors(settings, online=True):
     for name in names:
         path = discover(name, settings)
         version, error = _version(path, name)
-        entries[name] = dict(path=path, version=version, healthy=bool(version), latest=latest.get(name), update_available=_compare(version, latest.get(name), name), error=error, update_error=errors.get(name, ''))
+        entries[name] = dict(installed=bool(path and Path(path).is_file()), path=path, version=version, healthy=bool(version), latest=latest.get(name), update_available=_compare(version, latest.get(name), name), error=error, update_error=errors.get(name, ''))
     gpu = {}
     if entries['ffmpeg']['healthy']:
         for codec in ('h264_amf', 'h264_nvenc'):
@@ -106,14 +104,24 @@ def inspect_motors(settings, online=True):
         gpu = {c: {'available': False, 'error': 'FFmpeg no disponible'} for c in ('h264_amf', 'h264_nvenc')}
     roots = (managed_dir().resolve(), (Path(sys.executable).parent / 'tools').resolve(), (Path(__file__).parent / 'tools').resolve())
     autonomous = all(e['healthy'] and any(Path(e['path']).resolve().is_relative_to(root) for root in roots) for e in entries.values())
-    return {'entries': entries, 'ready': all(e['healthy'] for e in entries.values()), 'autonomous': autonomous, 'gpu': gpu}
+    from acceleration import find_nvenc,nvidia_info,compatible_candidates
+    nvenc={c:find_nvenc(entries['ffmpeg']['path'],c) for c in ('h264','h265')} if entries['ffmpeg']['healthy'] else {}
+    encoders=set()
+    for candidate in compatible_candidates(entries['ffmpeg']['path']) if entries['ffmpeg']['path'] else []:
+        try:
+            listing=_run(candidate,['-hide_banner','-encoders'])
+            encoders.update(re.findall(r'^\s*[A-Z.]{6}\s+(\S+)',listing.stdout,re.M))
+        except (OSError,subprocess.SubprocessError):pass
+    chosen=next((s['path'] for s in nvenc.values() if s['available']),None)
+    nvidia_version=_version(chosen,'ffmpeg')[0] if chosen else None
+    return {'entries': entries, 'ready': all(e['healthy'] for e in entries.values()), 'autonomous': autonomous, 'gpu': gpu,'installed_encoders':sorted(encoders),'nvenc':nvenc,'nvidia_version':nvidia_version,'nvidia_device':nvidia_info()}
 
 
-def _archive(url, checksum_url, names, destination):
+def _archive(url, checksum_url, names, destination, expected_sha256=None):
     """Extract only known executable basenames; validate before publishing as a group."""
     destination = Path(destination)
     destination.mkdir(parents=True, exist_ok=True)
-    checksum_matches = re.findall(r'\b[a-fA-F0-9]{64}\b', _read(checksum_url).decode())
+    checksum_matches = re.findall(r'\b[a-fA-F0-9]{64}\b', expected_sha256 if expected_sha256 else _read(checksum_url).decode())
     if len(checksum_matches) != 1:
         raise RuntimeError('Suma SHA256 oficial inválida.')
     checksum = checksum_matches[0].lower()
@@ -177,26 +185,46 @@ def _install_ffmpeg():
     base = 'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip'
     return _archive(base, base + '.sha256', ['ffmpeg', 'ffprobe'], managed_dir())
 
+def ensure_nvidia(settings=None,log=None):
+    from acceleration import find_nvenc,nvidia_info,compatible_candidates,COMPAT_URL,COMPAT_SHA256
+    log=log or (lambda _:None)
+    primary=discover('ffmpeg',settings)
+    if not primary:return ['Primero repara FFmpeg.']
+    status=find_nvenc(primary)
+    if status['available']:return ['Complemento NVIDIA NVENC verificado.']
+    if not nvidia_info():return ['Sin GPU NVIDIA detectada. Automático usará CPU.']
+    log('Instalando complemento NVIDIA compatible con verificación SHA256…')
+    paths=_archive(COMPAT_URL,None,['ffmpeg'],managed_dir()/'nvenc',expected_sha256=COMPAT_SHA256)
+    status=find_nvenc(paths['ffmpeg'])
+    return ['Complemento NVIDIA instalado y verificado.'] if status['available'] else ['Complemento NVIDIA instalado. El controlador no permite usar NVENC; Automático usará CPU. '+status['error']]
+
+def _with_nvidia(paths,settings,log,messages):
+    try:messages+=ensure_nvidia(settings,log)
+    except Exception as exc:messages+=['NVIDIA no pudo repararse; CPU sigue disponible. '+str(exc)]
+    return {**paths,'messages':messages}
+
 
 def repair_ffmpeg(settings, log=None):
     log = log or (lambda message: None)
     paths = {n: discover(n, settings) for n in ('ffmpeg', 'ffprobe')}
     if all(_version(paths[n], n)[0] for n in paths):
         log('FFmpeg y FFprobe configurados funcionan correctamente.')
-        return {**paths, 'messages': ['Motores actuales verificados.']}
+        return _with_nvidia(paths,settings,log,['Motores actuales verificados.'])
     base = Path(__file__).resolve().parent
     app = Path(sys.executable).parent if getattr(sys, 'frozen', False) else base
     for root in (managed_dir(), app / 'tools', base / 'tools'):
         bundled = {n: str(root / (n + '.exe')) for n in ('ffmpeg', 'ffprobe')}
         if all(_version(bundled[n], n)[0] for n in bundled):
-            return {**bundled, 'messages': ['Se recuperaron los motores incluidos.']}
+            return _with_nvidia(bundled,{**settings,**bundled},log,['Se recuperaron los motores incluidos.'])
     log('Descargando FFmpeg y FFprobe oficiales con verificación SHA256…')
-    return {**_install_ffmpeg(), 'messages': ['FFmpeg y FFprobe reparados en la carpeta de la aplicación.']}
+    paths=_install_ffmpeg()
+    return _with_nvidia(paths,{**settings,**paths},log,['FFmpeg y FFprobe reparados en la carpeta de la aplicación.'])
 
 
 def update_motors(settings, log=None):
     state=inspect_motors(dict(settings,compression_only=True),online=True)
     entries=state['entries']
     if all(e['healthy'] and e['update_available'] is not True for e in entries.values()):
-        return {**{n:e['path'] for n,e in entries.items()},'messages':['Motores verificados. No hay actualizaciones confirmadas.']}
-    return {**_install_ffmpeg(),'messages':['FFmpeg y FFprobe actualizados y verificados con SHA256.']}
+        return _with_nvidia({n:e['path'] for n,e in entries.items()},settings,log,['Motores verificados. No hay actualizaciones confirmadas.'])
+    paths=_install_ffmpeg()
+    return _with_nvidia(paths,{**settings,**paths},log,['FFmpeg y FFprobe actualizados y verificados con SHA256.'])

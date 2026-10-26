@@ -142,16 +142,28 @@ class SettingsDialog(PopupDialog):
         rows=['Estado: <b>'+('Listo para comprimir' if report.get('ready') else 'Requiere atención')+'</b>']
         for name in ('ffmpeg','ffprobe'):
             entry=report.get('entries',{}).get(name,{})
-            if not entry.get('healthy'):state='No disponible / reparar'
-            elif entry.get('update_available') is True:state='Desactualizado → '+str(entry.get('latest',''))
-            elif entry.get('update_available') is False:state='Actualizado'
-            else:state='Versión remota no verificable'
+            if not entry.get('installed',bool(entry.get('version'))):state='No instalado'
+            elif not entry.get('healthy'):state='Instalado · requiere reparación'
+            elif entry.get('update_available') is True:state='Instalado · requiere actualización → '+str(entry.get('latest',''))
+            elif entry.get('update_available') is False:state='Instalado · actualizado'
+            else:state='Instalado · actualización no comprobada'
             rows.append(html.escape({'ffmpeg':'FFmpeg','ffprobe':'FFprobe'}.get(name,name))+': <b>'+html.escape(str(entry.get('version') or 'No encontrado'))+'</b> · '+html.escape(state))
             if entry.get('error'):rows.append('<small>'+html.escape(str(entry['error']))+'</small>')
             if entry.get('update_error'):rows.append('<small>No se pudo consultar la versión remota: '+html.escape(str(entry['update_error']))+'</small>')
         gpu=report.get('gpu',{})
-        rows.append('AMD AMF: <b>'+('Disponible' if gpu.get('h264_amf',{}).get('available') else 'No disponible en este equipo')+'</b>')
-        rows.append('NVIDIA NVENC: <b>'+('Disponible' if gpu.get('h264_nvenc',{}).get('available') else 'No disponible en este equipo')+'</b>')
+        encoders=set(report.get('installed_encoders',[]))
+        rows.append('AMD AMF: <b>'+('Instalado en FFmpeg · compatible y probado' if gpu.get('h264_amf',{}).get('available') else 'Instalado en FFmpeg · no utilizable con la GPU/controlador actual' if 'h264_amf' in encoders else 'No instalado')+'</b>')
+        nvenc=report.get('nvenc',{})
+        for codec,title in [('h264','NVIDIA NVENC H.264'),('h265','NVIDIA NVENC H.265')]:
+            status=nvenc.get(codec,{})
+            rows.append(title+': <b>'+('Instalado · compatible y probado' if status.get('available') else 'Instalado en FFmpeg · requiere GPU/controlador compatible' if ('h264_nvenc' if codec=='h264' else 'hevc_nvenc') in encoders else 'No instalado')+'</b>')
+            if status.get('error'):rows.append('<small>'+html.escape(status['error'][:350])+'</small>')
+        if report.get('nvidia_device'):rows.append('GPU y controlador: <b>'+html.escape(report['nvidia_device'])+'</b>')
+        if report.get('nvidia_version'):rows.append('Motor NVIDIA compatible: <b>FFmpeg '+html.escape(report['nvidia_version'])+'</b>')
+        for encoder,title in [('libx264','CPU H.264'),('libx265','CPU H.265')]:
+            rows.append(title+': <b>'+('Instalado en FFmpeg · dos pasadas' if encoder in encoders else 'No instalado')+'</b>')
+        rows.append('<small>Los codificadores incluidos se actualizan con FFmpeg. El motor NVIDIA compatible se conserva mientras funcione.</small>')
+        rows.append('Automático: <b>NVIDIA si funciona; CPU como alternativa</b>')
         rows.append('Modo autónomo: <b>'+('Sí, motores incluidos' if report.get('autonomous') else 'Usa uno o más motores externos')+'</b>')
         self.motor_status.setText('<br>'.join(rows));self.status.setText('Comprobación de motores terminada.')
     def update_downloader(self):
