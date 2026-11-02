@@ -117,6 +117,36 @@ def _hide_work_directory(directory, log):
         if attributes==0xffffffff or not kernel.SetFileAttributesW(str(directory),attributes|2):
             log('No se pudo ocultar la carpeta temporal; la compresión puede continuar.')
 
+def _retry_video_bitrate(result, bitrate, cap, duration, audio_bitrate, ffprobe):
+    """Reduce video only: audio, subtitles and container bytes do not shrink with it."""
+    actual=Path(result).stat().st_size
+    fixed=min(audio_bitrate*duration/8, actual*.75)
+    try:
+        video=probe(result,ffprobe)['video']
+        video_bytes=float(video['bit_rate'])*float(video['duration'])/8
+        if math.isfinite(video_bytes) and 0<video_bytes<=actual:
+            fixed=actual-video_bytes
+    except (EncodeError,OSError,ValueError,KeyError,TypeError):
+        # Some muxers omit stream bit_rate. The selected audio budget is a
+        # conservative fallback; every subsequent result is still byte-checked.
+        pass
+    available=cap*.95-fixed
+    if available<=0:
+        raise EncodeError('El límite solicitado no permite conservar el audio y los subtítulos.')
+    return int(bitrate*min(.95,available/(actual-fixed)))
+
+def _capped_audio_copy_rates(audio, options, audio_rate):
+    """Copy eligible AAC tracks only when their known bitrate fits the budget."""
+    rates=[None]*len(audio)
+    if options.downmix_audio or options.trim_start!=0 or options.trim_end is not None:
+        return rates
+    for index,stream in enumerate(audio):
+        if stream.get('codec_name')!='aac':continue
+        try:rate=int(stream.get('bit_rate',0))
+        except (TypeError,ValueError,OverflowError):continue
+        if 0<rate<=audio_rate:rates[index]=rate
+    return rates
+
 def _run(cmd, control, duration, callback, pass_number, log, space_guard=None, total_passes=2, backend='cpu'):
     notified=False
     while space_guard and space_guard.check(control):
@@ -176,7 +206,7 @@ def compress(source, output_dir, options, control=None, progress=None, log=None,
         if status['available']:ffmpeg=status['path'];backend='nvidia'
         elif options.mode=='nvidia':raise EncodeError('NVIDIA no está disponible. Usa Actualizar motores o Reparar FFmpeg. '+status['error'])
         else:log('Automático: NVIDIA no está disponible; se usará CPU. '+status['error'])
-    log(('NVIDIA NVENC: codificación por GPU con alta calidad.' if backend=='nvidia' else 'CPU: codificación de dos pasadas para priorizar calidad por tamaño.'))
+    log(('NVIDIA NVENC: codificación por GPU con alta calidad.' if backend=='nvidia' else 'CPU: codificación de calidad constante sin límite de tamaño.' if options.unlimited else 'CPU: codificación de dos pasadas para priorizar calidad por tamaño.'))
     info=probe(source,ffprobe); source=Path(source).resolve(); out=Path(output_dir).resolve(); out.mkdir(parents=True,exist_ok=True)
     if options.codec not in ('h264','h265'): raise EncodeError('Códec no válido.')
     if not options.unlimited and (not math.isfinite(options.max_gb) or options.max_gb<=0): raise EncodeError('El límite de tamaño debe ser positivo.')
@@ -204,12 +234,14 @@ def compress(source, output_dir, options, control=None, progress=None, log=None,
     if burn and len(subs)!=1: raise EncodeError('Elige una sola pista para incrustar en la imagen.')
     if not burn and any(s.get('codec_name') not in text_subs for s in subs): raise EncodeError('Los subtítulos de imagen requieren el modo incrustado.')
     audio_rate=min(max(32,int(options.audio_kbps)),512)*1000
-    bitrate=0
+    bitrate=0;audio_copy_rates=[None]*len(audio);audio_budget=audio_rate*len(audio)
     if not options.unlimited:
         budget=cap*8/duration*.95
         if audio: audio_rate=min(audio_rate,int(budget*.25/len(audio)))
         if audio and audio_rate<24000: raise EncodeError('El límite es demasiado pequeño para conservar las pistas de audio.')
-        bitrate=int(budget-audio_rate*len(audio))
+        audio_copy_rates=_capped_audio_copy_rates(audio,options,audio_rate)
+        audio_budget=sum(rate if rate is not None else audio_rate for rate in audio_copy_rates)
+        bitrate=int(budget-audio_budget)
         if bitrate<20000: raise EncodeError('El límite de tamaño es demasiado pequeño para este video.')
     else:
         log('Sin límite de tamaño: calidad visual alta (CRF/CQ 18), sin reducir bitrate para alcanzar GB. El tamaño final depende del contenido.')
@@ -241,14 +273,19 @@ def compress(source, output_dir, options, control=None, progress=None, log=None,
         temp=Path(temp); result=temp/'result.mp4'; stats=temp/'pass'
         _hide_work_directory(temp,log)
         space_guard=DiskSpaceGuard(out,log)
+        analysis_ready=False
         for attempt in range(4):
-            gpu=backend=='nvidia';total_passes=1 if gpu or options.unlimited else 2
+            gpu=backend=='nvidia'
+            passes=(1,) if gpu or options.unlimited else (2,) if analysis_ready else (1,2)
+            total_passes=len(passes)
             codec=('h264_nvenc' if options.codec=='h264' else 'hevc_nvenc') if gpu else ('libx264' if options.codec=='h264' else 'libx265')
-            log(f'Intento {attempt+1}: '+('calidad constante · ' if options.unlimited else f'{bitrate//1000} kb/s · ')+('NVIDIA, una codificación con análisis interno.' if gpu else 'CPU, calidad constante.' if options.unlimited else 'CPU, dos pasadas.'))
+            log(f'Intento {attempt+1}: '+('calidad constante · ' if options.unlimited else f'{bitrate//1000} kb/s · ')+('NVIDIA, una codificación con análisis interno.' if gpu else 'CPU, calidad constante.' if options.unlimited else 'CPU, análisis reutilizado.' if analysis_ready else 'CPU, dos pasadas.'))
+            if not gpu and not options.unlimited and analysis_ready:
+                log('Se reutiliza el análisis CPU del mismo video; solo se repite la compresión con el bitrate ajustado.')
             try:
-                for pn in range(1,total_passes+1):
+                for progress_pass,pn in enumerate(passes,1):
                     first_analysis=not gpu and not options.unlimited and pn==1
-                    log('Compresión NVIDIA: GPU con análisis adaptativo de calidad.' if gpu else 'Compresión CPU: calidad constante sin límite de tamaño.' if options.unlimited else 'Etapa 1/2: análisis del video para distribuir la calidad.' if pn==1 else 'Etapa 2/2: compresión y creación del MP4.')
+                    log('Compresión NVIDIA: GPU con análisis adaptativo de calidad.' if gpu else 'Compresión CPU: calidad constante sin límite de tamaño.' if options.unlimited else 'Compresión CPU con análisis reutilizado.' if total_passes==1 else 'Etapa 1/2: análisis del video para distribuir la calidad.' if pn==1 else 'Etapa 2/2: compresión y creación del MP4.')
                     cmd=[ffmpeg,'-hide_banner','-y','-nostdin','-loglevel','warning','-ss',str(start),'-i',str(source)]
                     if not options.unlimited or options.trim_end is not None:cmd+=['-t',str(duration)]
                     if bitmap_burn:
@@ -256,7 +293,11 @@ def compress(source, output_dir, options, control=None, progress=None, log=None,
                     else: cmd+=['-map',f"0:{info['video']['index']}",'-vf',vf]
                     if gpu:
                         gpu_preset={'rapido':'p4','equilibrado':'p5','calidad':'p6'}.get(options.speed,'p5')
-                        cmd+=['-c:v',codec,'-preset',gpu_preset,'-tune','hq','-rc','vbr','-cq','18' if options.unlimited else '19','-b:v','0' if options.unlimited else str(bitrate)]
+                        cmd+=['-c:v',codec,'-preset',gpu_preset,'-tune','hq','-rc','vbr','-b:v','0' if options.unlimited else str(bitrate)]
+                        # CQ overrides the average bitrate target in NVENC VBR.
+                        # Use it only when file size is unrestricted; otherwise
+                        # spend the available bitrate without quality-target overshoot.
+                        if options.unlimited:cmd+=['-cq','18']
                         if not options.unlimited:cmd+=['-maxrate',str(int(bitrate*1.5)),'-bufsize',str(bitrate*2)]
                         cmd+=['-multipass','qres','-spatial-aq','1','-aq-strength','8','-rc-lookahead','20','-bf','3']
                     else:
@@ -270,6 +311,11 @@ def compress(source, output_dir, options, control=None, progress=None, log=None,
                         for s in audio+([] if burn else subs): cmd+=['-map',f"0:{s['index']}"]
                         cmd+=['-c:a','aac','-b:a',str(audio_rate),'-c:s','mov_text','-map_metadata','0','-movflags','+faststart']
                         if options.downmix_audio:cmd+=['-ac','2']
+                        if not options.unlimited:
+                            for index,rate in enumerate(audio_copy_rates):
+                                if rate is not None:
+                                    cmd+=['-c:a:'+str(index),'copy']
+                                    log('Audio '+str(audio[index]['index'])+': AAC original sin recodificar; bitrate reservado según la pista.')
                         if options.unlimited and not options.downmix_audio:
                             for index,stream in enumerate(audio):
                                 if stream.get('codec_name') in ('aac','ac3','eac3','alac','mp3'):
@@ -281,7 +327,8 @@ def compress(source, output_dir, options, control=None, progress=None, log=None,
                         if options.codec=='h265':cmd+=['-tag:v','hvc1']
                         cmd+=[str(result)]
                     cmd[1:1]=['-progress','pipe:1','-stats_period','0.3']
-                    _run(cmd,control,duration,progress,pn,log,space_guard,total_passes,backend)
+                    _run(cmd,control,duration,progress,progress_pass,log,space_guard,total_passes,backend)
+                    if first_analysis:analysis_ready=True
             except EncodeCancelled:raise
             except EncodeError as exc:
                 if gpu and options.mode=='auto':
@@ -290,7 +337,8 @@ def compress(source, output_dir, options, control=None, progress=None, log=None,
                 raise
             actual=result.stat().st_size
             if options.unlimited or actual<=cap: break
-            bitrate=int(bitrate*cap/actual*.93); log('Se ajustará el bitrate para cumplir el tamaño máximo.')
+            bitrate=_retry_video_bitrate(result,bitrate,cap,duration,audio_budget,ffprobe)
+            log('Se ajustará el bitrate de video para cumplir el tamaño máximo, conservando las pistas seleccionadas.')
             if bitrate<10000: raise EncodeError('El límite solicitado no permite una salida válida.')
         else: raise EncodeError('No se alcanzó el tamaño máximo; no se publicó ningún archivo.')
         if control.cancelled.is_set(): raise EncodeCancelled('Compresión cancelada.')

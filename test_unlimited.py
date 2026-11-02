@@ -1,8 +1,8 @@
 import unittest,subprocess,hashlib
 from unittest.mock import patch
 import engine,acceleration
-from test_engine import EngineChecks
-class UnlimitedChecks(EngineChecks):
+import test_engine as _engine_tests
+class UnlimitedChecks(_engine_tests.EngineChecks):
  def test_cpu_and_gpu_quality_without_cap(self):
   for mode in ('cpu','nvidia','auto'):
    for codec in ('h264','h265'):

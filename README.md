@@ -2,11 +2,11 @@
 
 <p align="center"><img src="assets/mb-logo-02.png" width="180" alt="MB Compresor de Video IA"></p>
 
-Compresor de escritorio para Windows de 64 bits. Exporta videos locales a MP4 de alta calidad con control de tamaño máximo. Versión **1.0.40**.
+Compresor de escritorio para Windows de 64 bits. Exporta videos locales a MP4 de alta calidad con control de tamaño máximo. Versión **1.0.41**.
 
 ## Descargar
 
-En [Releases](https://github.com/floresroldanluis/MBCompresorVideoIA/releases/latest), descarga **MBCompresorVideoIA-Setup-v1.0.40-windows-x64.exe** y sigue el asistente. Incluye FFmpeg y FFprobe; no requiere Python. Para usar la versión portátil, extrae toda la carpeta del ZIP antes de abrir `MB Compresor Pro.exe`.
+En [Releases](https://github.com/floresroldanluis/MBCompresorVideoIA/releases/latest), descarga **MBCompresorVideoIA-Setup-v1.0.41-windows-x64.exe** y sigue el asistente. Incluye FFmpeg y FFprobe; no requiere Python. Para usar la versión portátil, extrae toda la carpeta del ZIP antes de abrir `MB Compresor Pro.exe`.
 
 ## Funciones
 
@@ -40,7 +40,7 @@ FFmpeg/FFprobe pueden estar en PATH o en `tools/`. Configuración también permi
 
 Para compilar, coloca `ffmpeg.exe` y `ffprobe.exe` en `tools/` (puedes obtenerlos del ZIP publicado) y ejecuta `Construir.ps1`. Con [Inno Setup 6](https://jrsoftware.org/isinfo.php) instalado, `Construir-Instalador.ps1` genera el instalador.
 
-`Preparar-Release.ps1 -ReleaseVersion 1.0.40` genera el ZIP del actualizador y `SHA256SUMS`. La etiqueta del Release, el paquete y `app.py` deben usar la misma versión.
+`Preparar-Release.ps1 -ReleaseVersion 1.0.41` genera el ZIP del actualizador y `SHA256SUMS`. La etiqueta del Release, el paquete y `app.py` deben usar la misma versión.
 
 ## Pruebas
 
@@ -65,3 +65,7 @@ Además de FFmpeg y FFprobe en `tools/`, el empaquetado requiere `tools/nvenc/ff
 ```
 
 El instalador y ZIP publicados ya incluyen este complemento. No requieren CUDA Toolkit. La disponibilidad de NVENC depende de la GPU y su controlador.
+
+## Optimización de codificación 1.0.41
+
+Revisada con Astra: VBR por tamaño en NVIDIA para reducir reintentos, análisis CPU reutilizable y copia de audio AAC compatible sin pérdida adicional cuando cabe en el presupuesto. No cambia el códec elegido ni reduce la resolución para acelerar. [Mediciones y límites de la comparación](MEJORAS_CODIFICACION.md).

@@ -1,4 +1,4 @@
-param([string]$ReleaseVersion='1.0.40')
+param([string]$ReleaseVersion='1.0.41')
 $ErrorActionPreference='Stop'
 if($ReleaseVersion -notmatch '^\d+\.\d+\.\d+$'){throw 'Usa una versión como 1.0.6'}
 $package=Join-Path $PSScriptRoot 'Aplicacion\MB Compresor Pro'

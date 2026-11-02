@@ -2,9 +2,9 @@ import unittest
 from unittest.mock import patch
 import engine
 import acceleration
-from test_engine import EngineChecks
+import test_engine as _engine_tests
 
-class AccelerationChecks(EngineChecks):
+class AccelerationChecks(_engine_tests.EngineChecks):
     def test_auto_without_gpu_uses_cpu(self):
         events=[]
         with patch('acceleration.find_nvenc',return_value=dict(available=False,error='simulado')):
