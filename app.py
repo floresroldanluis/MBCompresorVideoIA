@@ -23,7 +23,7 @@ import engine
 from acceleration import MODES
 from local_ai import OllamaClient
 
-VERSION = '1.0.41'
+VERSION = '1.0.42'
 DATA = (Path(os.environ.get('USERPROFILE',str(Path.home())))/'AppData'/'Local' if os.name=='nt' else Path(os.environ.get('LOCALAPPDATA',str(Path.home()))))/'MBCompresorPro'
 CONFIG = DATA / 'settings.json'
 
@@ -98,6 +98,7 @@ class ContrastProgressBar(QProgressBar):
         self.style().drawControl(QStyle.CE_ProgressBar,option,painter,self)
         if not self.isTextVisible() or self.maximum()<=self.minimum():return
         text_rect=self.style().subElementRect(QStyle.SE_ProgressBarLabel,option,self)
+        font=painter.font();font.setBold(True);painter.setFont(font)
         painter.setPen(self.palette().color(QPalette.Text))
         painter.drawText(text_rect,Qt.AlignCenter,self.text())
         contents=self.style().subElementRect(QStyle.SE_ProgressBarContents,option,self)
@@ -253,7 +254,7 @@ class MainWindow(QMainWindow):
         QPushButton#primary {{background:qlineargradient(x1:0,y1:0,x2:1,y2:0,stop:0 #156ff1,stop:1 #00b9e8);color:white;border:0;padding:12px 20px;}} QPushButton#primary:hover {{background:#1269d5;}} QPushButton#primary:disabled {{background:{field};color:{muted};border:1px solid {border};}}
         QLineEdit,QComboBox,QSpinBox,QDoubleSpinBox,QPlainTextEdit {{background:{field};border:1px solid {border};border-radius:7px;padding:8px;selection-background-color:#237bea;}}
         QComboBox QAbstractItemView {{background:{cardbg};color:{fg};selection-background-color:#237bea;}}
-        QProgressBar {{background:{field};border:0;border-radius:4px;height:8px;max-height:12px;text-align:center;font-size:9px;}}
+        QProgressBar {{background:{field};border:0;border-radius:4px;height:8px;max-height:12px;text-align:center;font-size:9px;font-weight:700;}}
         QProgressBar::chunk {{background:#2891f5;border-radius:4px;}} QGroupBox {{border:1px solid {border};border-radius:8px;margin-top:18px;padding:12px;}}
         QGroupBox::title {{subcontrol-origin:margin;left:12px;}} QCheckBox {{padding:5px;}}
         ''')

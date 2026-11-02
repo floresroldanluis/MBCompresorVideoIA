@@ -1,4 +1,4 @@
-#define AppVersion "1.0.41"
+#define AppVersion "1.0.42"
 [Setup]
 AppId={{C52EF970-71D0-42E7-93CD-29D96781F120}
 AppName=MB Compresor de Video IA
