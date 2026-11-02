@@ -11,19 +11,19 @@ import time
 import traceback
 
 from PySide6.QtCore import Qt, QObject, Signal, QTimer, QPropertyAnimation, QEasingCurve
-from PySide6.QtGui import QAction, QDesktopServices, QIcon, QFontDatabase, QPixmap, QBitmap, QRegion
+from PySide6.QtGui import QAction, QDesktopServices, QIcon, QPainter, QPalette, QFontDatabase, QPixmap, QBitmap, QRegion
 from PySide6.QtCore import QUrl
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
  QHBoxLayout, QLabel, QPushButton, QFrame, QLineEdit, QDoubleSpinBox, QSpinBox,
  QComboBox, QProgressBar, QPlainTextEdit, QFileDialog, QMessageBox, QSplitter,
  QScrollArea, QDialog, QFormLayout, QDialogButtonBox, QCheckBox, QGroupBox,
- QStackedWidget, QInputDialog, QGridLayout, QStyle)
+ QStackedWidget, QInputDialog, QGridLayout, QStyle, QStyleOptionProgressBar)
 
 import engine
 from acceleration import MODES
 from local_ai import OllamaClient
 
-VERSION = '1.0.39'
+VERSION = '1.0.40'
 DATA = (Path(os.environ.get('USERPROFILE',str(Path.home())))/'AppData'/'Local' if os.name=='nt' else Path(os.environ.get('LOCALAPPDATA',str(Path.home()))))/'MBCompresorPro'
 CONFIG = DATA / 'settings.json'
 
@@ -88,6 +88,23 @@ class Bridge(QObject):
     advice=Signal(str,object)
     advice_error=Signal(str)
     download_done=Signal(str)
+
+class ContrastProgressBar(QProgressBar):
+    """Keep the percentage white on the blue fill and readable on the track."""
+    def paintEvent(self,event):
+        option=QStyleOptionProgressBar();self.initStyleOption(option)
+        option.textVisible=False
+        painter=QPainter(self)
+        self.style().drawControl(QStyle.CE_ProgressBar,option,painter,self)
+        if not self.isTextVisible() or self.maximum()<=self.minimum():return
+        text_rect=self.style().subElementRect(QStyle.SE_ProgressBarLabel,option,self)
+        painter.setPen(self.palette().color(QPalette.Text))
+        painter.drawText(text_rect,Qt.AlignCenter,self.text())
+        contents=self.style().subElementRect(QStyle.SE_ProgressBarContents,option,self)
+        fraction=max(0.,min(1.,(self.value()-self.minimum())/(self.maximum()-self.minimum())))
+        fill=contents.adjusted(0,0,-contents.width()+round(contents.width()*fraction),0)
+        painter.setClipRect(fill)
+        painter.setPen(Qt.white);painter.drawText(text_rect,Qt.AlignCenter,self.text())
 
 class Item:
     def __init__(self,path,settings):
@@ -196,7 +213,7 @@ class MainWindow(QMainWindow):
         self.add_videos_button=button('Agregar Videos',self.add_files,True);bar.addWidget(self.add_videos_button)
         self.ai_btn=button('Recomendar con IA local',self.ask_ai); bar.addWidget(self.ai_btn); bar.addWidget(button('Limpiar terminados',self.clear_finished)); cl.addLayout(bar)
         self.scroll=QScrollArea(); self.scroll.setWidgetResizable(True); self.queue_widget=QWidget(); self.queue_layout=QVBoxLayout(self.queue_widget); self.queue_layout.setContentsMargins(0,0,0,0); self.queue_layout.setSpacing(10); self.empty=label('<b>Arrastra tus videos aquí</b><br><span style="font-weight:400;font-size:13px">Tambien puedes soltarlos en cualquier parte de la ventana</span>','empty'); self.empty.setAlignment(Qt.AlignCenter); self.queue_layout.addWidget(self.empty,1); self.queue_layout.addStretch(0); self.scroll.setWidget(self.queue_widget); cl.addWidget(self.scroll,1)
-        footer=card(); fl=QVBoxLayout(footer); self.status=label('Listo para comprimir.','section'); fl.addWidget(self.status); self.total_progress=QProgressBar(); self.total_progress.setValue(0); fl.addWidget(self.total_progress); actions=QHBoxLayout(); actions.addWidget(label('Motor automático o seleccionado · calidad y tamaño según ajustes','muted')); actions.addStretch(); self.pause_btn=button('Pausar',self.pause); self.pause_btn.setEnabled(False); actions.addWidget(self.pause_btn); self.stop_btn=button('Detener todo',self.stop); self.stop_btn.setEnabled(False); actions.addWidget(self.stop_btn); self.start_btn=button('Iniciar compresión  →',self.start,True); actions.addWidget(self.start_btn); fl.addLayout(actions); cl.addWidget(footer)
+        footer=card(); fl=QVBoxLayout(footer); self.status=label('Listo para comprimir.','section'); fl.addWidget(self.status); self.total_progress=ContrastProgressBar(); self.total_progress.setValue(0); fl.addWidget(self.total_progress); actions=QHBoxLayout(); actions.addWidget(label('Motor automático o seleccionado · calidad y tamaño según ajustes','muted')); actions.addStretch(); self.pause_btn=button('Pausar',self.pause); self.pause_btn.setEnabled(False); actions.addWidget(self.pause_btn); self.stop_btn=button('Detener todo',self.stop); self.stop_btn.setEnabled(False); actions.addWidget(self.stop_btn); self.start_btn=button('Iniciar compresión  →',self.start,True); actions.addWidget(self.start_btn); fl.addLayout(actions); cl.addWidget(footer)
         log_panel=card();log_layout=QVBoxLayout(log_panel);log_layout.setContentsMargins(10,8,10,8);log_layout.setSpacing(6)
         self.logs=QPlainTextEdit(); self.logs.setReadOnly(True); self.logs.setMaximumHeight(100); self.logs.setPlaceholderText('Registro de avisos y eventos'); self.logs.document().setMaximumBlockCount(500)
         log_controls=QHBoxLayout();log_controls.setSpacing(6)
@@ -291,7 +308,7 @@ class MainWindow(QMainWindow):
     def find(self,path):return next((i for i in self.items if i.path==path),None)
     def build_row(self,item):
         f=card(); l=QVBoxLayout(f); l.setContentsMargins(15,12,15,12); top=QHBoxLayout(); name=label(Path(item.path).name,'section'); name.setToolTip(item.path); top.addWidget(name,1); state=label(item.state,'badge'); top.addWidget(state); l.addLayout(top)
-        meta=label('Leyendo metadatos…','muted'); l.addWidget(meta); progress=QProgressBar(); progress.setValue(0); l.addWidget(progress)
+        meta=label('Leyendo metadatos…','muted'); l.addWidget(meta); progress=ContrastProgressBar(); progress.setValue(0); l.addWidget(progress)
         bottom=QHBoxLayout(); detail=label('','muted'); bottom.addWidget(detail,1); options=button('Resolución, audio y subtítulos',lambda:self.item_options(item)); options.setEnabled(False); bottom.addWidget(options); openbtn=button('Abrir salida',lambda:self.open_result(item)); openbtn.setEnabled(False); bottom.addWidget(openbtn); remove=button('Quitar',lambda:self.remove_item(item)); bottom.addWidget(remove); l.addLayout(bottom)
         self.rows[item.path]=dict(frame=f,layout=l,state=state,meta=meta,progress=progress,detail=detail,options=options,open=openbtn,remove=remove,editor=None)
         self.queue_layout.insertWidget(self.queue_layout.count()-1,f)

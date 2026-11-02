@@ -1,4 +1,4 @@
-# MB Compresor de Video IA · versión 1.0.39
+# MB Compresor de Video IA · versión 1.0.40
 
 Compresor de video de escritorio para Windows. Su función es transformar videos locales a MP4 de alta calidad, con un tamaño máximo por archivo.
 
@@ -57,7 +57,7 @@ En 1.0.5, el título MB Compresor de Video IA y el subtítulo están centrados. 
 Para publicar futuras actualizaciones, compila la versión con Construir.ps1 y genera sus archivos con Preparar-Release.ps1 -ReleaseVersion 1.0.6 (cambia la versión cuando corresponda). En el repositorio crea un Release estable con etiqueta v1.0.6 y adjunta el ZIP generado y SHA256SUMS. No subas solo el ejecutable: necesita la carpeta _internal y los motores. El actualizador espera el paquete ZIP de Windows de esta aplicación; un instalador de otro programa no se ejecuta automáticamente. El ZIP y la etiqueta deben corresponder a la versión de app.py. La instalación conserva respaldos en AppData\\Local\\MBCompresorPro\\updates y registra el resultado en last-result.json.
 
 
-La versión 1.0.39 incorpora una transición de aparición al abrir (260 ms) y desvanecimiento al cerrar (220 ms), sin bloquear la interfaz. La cola se guarda antes de cerrar. Si hay una compresión o consulta de IA en curso, el cierre sigue protegido. La instalación de actualizaciones utiliza también este cierre animado antes de reiniciar.
+La versión 1.0.40 incorpora una transición de aparición al abrir (260 ms) y desvanecimiento al cerrar (220 ms), sin bloquear la interfaz. La cola se guarda antes de cerrar. Si hay una compresión o consulta de IA en curso, el cierre sigue protegido. La instalación de actualizaciones utiliza también este cierre animado antes de reiniciar.
 
 
 ## Modos de compresión
