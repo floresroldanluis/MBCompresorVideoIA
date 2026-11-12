@@ -23,7 +23,7 @@ import engine
 from acceleration import MODES
 from local_ai import OllamaClient
 
-VERSION = '1.0.42'
+VERSION = '1.0.43'
 DATA = (Path(os.environ.get('USERPROFILE',str(Path.home())))/'AppData'/'Local' if os.name=='nt' else Path(os.environ.get('LOCALAPPDATA',str(Path.home()))))/'MBCompresorPro'
 CONFIG = DATA / 'settings.json'
 
@@ -41,6 +41,8 @@ def load_settings():
     if defaults.get('output_profile_version',0)<5:
         defaults.update(output_folder='',output_profile_version=5)
     # Unlimited compression is an explicit choice for the current session.
+    if defaults.get('full_hd_profile_version',0)<1:
+        defaults.update(height=1080,speed='calidad',audio_kbps=512,full_hd_profile_version=1)
     defaults['unlimited']=False
     defaults['compression_only']=True
     if not defaults.get('releases_url'):defaults['releases_url']='https://github.com/floresroldanluis/MBCompresorVideoIA'
@@ -84,6 +86,7 @@ class Bridge(QObject):
     event=Signal(str)
     progress=Signal(str,object)
     result=Signal(str,str,str)
+    save_result=Signal(str,str,str)
     done=Signal()
     advice=Signal(str,object)
     advice_error=Signal(str)
@@ -109,7 +112,7 @@ class ContrastProgressBar(QProgressBar):
 
 class Item:
     def __init__(self,path,settings):
-        self.path=path; self.info=None; self.state='Analizando'; self.output=None; self.track_defaults_applied=False
+        self.path=path; self.info=None; self.state='Analizando'; self.output=None; self.recovery_target=None; self.track_defaults_applied=False
         self.output_dir=settings.get('output_folder','')
         self.options=engine.CompressionOptions(unlimited=bool(settings.get('unlimited',False)),max_gb=float(settings.get('max_gb',1.95)),
             codec=settings.get('codec','h264'),speed=settings.get('speed','calidad'),
@@ -122,7 +125,7 @@ class ItemOptions(QWidget):
         super().__init__(parent); self.setObjectName('inlineOptions')
         self.item=item; l=QVBoxLayout(self)
         f=QGridLayout();l.addLayout(f);f.setColumnStretch(1,1);f.setColumnStretch(3,1)
-        self.height=combo([('Original',0),('4K · 2160p',2160),('1440p',1440),('1080p',1080),('720p',720),('480p',480)],item.options.height)
+        self.height=combo([('Original',0),('4K · 2160p',2160),('1440p',1440),('Full HD · 1080p',1080),('720p',720),('480p',480)],item.options.height)
         self.audio=combo([('Todas las pistas',None),('Sin audio',[])] + [(f"{s['index']}: {s.get('tags',{}).get('language','und')} · {s.get('codec_name','')} · {s.get('channels',0)} canales",[s['index']]) for s in item.info['audio']],item.options.audio_indices)
         self.kbps=combo([(f'{n} kbps'+(' · máxima calidad' if n==512 else ''),n) for n in (512,384,320,256,192,160,128,96,64,32)],item.options.audio_kbps)
         self.sub=combo([('Sin subtítulos',[])]+[(f"{s['index']}: {s.get('tags',{}).get('language','und')} · {s.get('codec_name','')}",[s['index']]) for s in item.info['subtitles']],item.options.subtitle_indices)
@@ -169,11 +172,11 @@ class MainWindow(QMainWindow):
         if os.name=='nt':
             for font in ('segoeui.ttf','segoeuib.ttf'):
                 QFontDatabase.addApplicationFont(str(Path(os.environ.get('WINDIR','C:/Windows'))/'Fonts'/font))
-        super().__init__(); self.version=VERSION; self.restored={}; self.settings=load_settings(); self.items=[]; self.rows={}; self.active=False; self.control=None; self.paused=False; self.stop_event=threading.Event(); self.ai_busy=False; self.downloading=False; self.download_cancel=None; self.total_count=0; self.completed_count=0
+        super().__init__(); self.version=VERSION; self.restored={}; self.settings=load_settings(); self.items=[]; self.rows={}; self.active=False; self.saving=False; self.pending_saves={}; self.control=None; self.paused=False; self.stop_event=threading.Event(); self.ai_busy=False; self.downloading=False; self.download_cancel=None; self.total_count=0; self.completed_count=0
         self._has_appeared=False;self._closing=False;self._allow_close=False;self._fade_animation=None
         self._animate_windows=QApplication.platformName() not in ('offscreen','minimal')
         if self._animate_windows:self.setWindowOpacity(0.0)
-        self.bridge=Bridge(); self.bridge.metadata.connect(self.on_metadata); self.bridge.event.connect(self.log); self.bridge.progress.connect(self.on_progress); self.bridge.result.connect(self.on_result); self.bridge.done.connect(self.on_done); self.bridge.advice.connect(self.on_advice); self.bridge.advice_error.connect(self.ai_error); self.bridge.download_done.connect(lambda _:None)
+        self.bridge=Bridge(); self.bridge.metadata.connect(self.on_metadata); self.bridge.event.connect(self.log); self.bridge.progress.connect(self.on_progress); self.bridge.result.connect(self.on_result);self.bridge.save_result.connect(self.on_save_result); self.bridge.done.connect(self.on_done); self.bridge.advice.connect(self.on_advice); self.bridge.advice_error.connect(self.ai_error); self.bridge.download_done.connect(lambda _:None)
         self.setWindowTitle('MB Compresor de Video IA'); self.setMinimumSize(940,720); self.setAcceptDrops(True)
         screen=QApplication.primaryScreen();available=screen.availableGeometry() if screen else None
         self.resize(1200,min(1000,max(720,available.height()-40)) if available else 1000)
@@ -197,18 +200,20 @@ class MainWindow(QMainWindow):
         compression=QWidget(); cl=QVBoxLayout(compression); cl.setContentsMargins(0,0,0,0); cl.setSpacing(12); self.pages.addWidget(compression)
         controls=card(); c=QVBoxLayout(controls); c.setContentsMargins(18,16,18,16)
         outrow=QHBoxLayout(); outrow.addWidget(label('Guardar en')); self.output=QLineEdit(self.settings.get('output_folder','')); self.output.setReadOnly(True); self.output.setPlaceholderText('Misma carpeta que cada video original'); outrow.addWidget(self.output,1); outrow.addWidget(button('Cambiar…',self.choose_output));outrow.addWidget(button('Usar carpeta original',self.original_output));  c.addLayout(outrow)
-        opts=QHBoxLayout(); self.limit=QDoubleSpinBox(); self.limit.setDecimals(4); self.limit.setRange(.0001,1000); self.limit.setValue(float(self.settings['max_gb'])); self.limit.setSuffix(' GB'); self.limit.setToolTip('Tamaño máximo por archivo. 1 GB = 1 000 000 000 bytes.'); self.codec=combo([('H.264 · compatible','h264'),('H.265 · más compresión','h265')],self.settings['codec']); self.speed=combo([('Rápido','rapido'),('Equilibrado','equilibrado'),('Máxima calidad','calidad')],self.settings['speed']); self.res=combo([('Original',0),('4K',2160),('1440p',1440),('1080p',1080),('720p',720),('480p',480)],self.settings['height'])
+        opts=QHBoxLayout(); self.limit=QDoubleSpinBox(); self.limit.setDecimals(4); self.limit.setRange(.0001,1000); self.limit.setValue(float(self.settings['max_gb'])); self.limit.setSuffix(' GB'); self.limit.setToolTip('Tamaño máximo por archivo. 1 GB = 1 000 000 000 bytes.'); self.codec=combo([('H.264 · compatible','h264'),('H.265 · más compresión','h265')],self.settings['codec']); self.speed=combo([('Rápido','rapido'),('Equilibrado','equilibrado'),('Máxima calidad','calidad')],self.settings['speed']); self.res=combo([('Original',0),('4K',2160),('1440p',1440),('Full HD · 1080p',1080),('720p',720),('480p',480)],self.settings['height'])
         for text,w in [('Máximo por video con límite',self.limit),('Códec',self.codec),('Velocidad',self.speed),('Resolución',self.res)]:
             col=QVBoxLayout(); col.addWidget(label(text,'muted')); col.addWidget(w); opts.addLayout(col)
         self.unlimited=QCheckBox('Máximo por video sin límite');self.unlimited.setChecked(bool(self.settings.get('unlimited',False)))
         self.unlimited.setToolTip('Comprime por calidad visual alta, sin límite de GB. Conserva el audio sin recodificar cuando es compatible con MP4. No es compresión sin pérdida de video.')
         col=QVBoxLayout();col.addStretch();col.addWidget(self.unlimited);opts.insertLayout(1,col)
         self.limit.setEnabled(not self.unlimited.isChecked());self.unlimited.toggled.connect(self.unlimited_changed)
+        self.res.setToolTip('Full HD limita a 1920×1080 y conserva la proporción del video. No amplía videos pequeños. Un límite de GB muy bajo reduce el detalle.')
         c.addLayout(opts)
         mode_row=QHBoxLayout();mode_row.addWidget(label('Modo de compresión'));self.mode=combo(MODES,self.settings.get('mode','auto'));mode_row.addWidget(self.mode,1);c.addLayout(mode_row)
         self.mode.setToolTip('Automático elige NVIDIA si supera una prueba real; si falla usa CPU. CPU prioriza calidad por tamaño con dos pasadas.')
         self.mode.currentIndexChanged.connect(self.mode_changed);self.speed.setEnabled(self.mode.currentData()!='cpu')
         c.addWidget(button('Aplicar estos ajustes a los pendientes',self.apply_globals)); cl.addWidget(controls)
+        self.recovery_notice=button('Recuperar guardados pendientes',self.restore_pending_saves);self.recovery_notice.hide();cl.addWidget(self.recovery_notice)
         bar=QHBoxLayout(); self.queue_title=label('COLA DE COMPRESIÓN  /  0 VIDEOS','eyebrow'); bar.addWidget(self.queue_title); bar.addStretch()
         self.add_folder_button=button('Agregar carpeta',self.add_folder);bar.addWidget(self.add_folder_button)
         self.add_videos_button=button('Agregar Videos',self.add_files,True);bar.addWidget(self.add_videos_button)
@@ -227,9 +232,11 @@ class MainWindow(QMainWindow):
         if update_result.is_file():
             try:
                 result=json.loads(update_result.read_text(encoding='utf-8-sig'))
-                self.log('Actualización instalada: '+str(result.get('version')) if result.get('ok') else 'Actualización no completada: '+str(result.get('message')))
+                if result.get('ok') and str(result.get('version','')).lstrip('v')==VERSION:self.log('Actualización instalada: '+str(result.get('version')))
+                elif not result.get('ok'):self.log('Último intento de actualización no completado: '+str(result.get('message')))
             except (OSError,ValueError):pass
         save_settings(self.settings)
+        self._load_pending_saves()
         # Each launch starts with an empty drop area.
     def log(self,text): self.logs.appendPlainText(f'{time.strftime("%H:%M:%S")}  {text}')
     def toggle_logs(self):
@@ -304,22 +311,25 @@ class MainWindow(QMainWindow):
                 try:self.bridge.metadata.emit(it.path,engine.probe(it.path,self.settings.get('ffprobe') or None))
                 except Exception as exc:self.bridge.metadata.emit(it.path,exc)
             threading.Thread(target=analyze,daemon=True).start()
-        self.empty.setVisible(not self.items); self.update_title(); self.persist_queue()
+        self.empty.setVisible(not self.items); self.update_title(); self.persist_queue();self._update_recovery_notice()
         if self.active:self._refresh_run_summary();self._process_next()
     def find(self,path):return next((i for i in self.items if i.path==path),None)
     def build_row(self,item):
         f=card(); l=QVBoxLayout(f); l.setContentsMargins(15,12,15,12); top=QHBoxLayout(); name=label(Path(item.path).name,'section'); name.setToolTip(item.path); top.addWidget(name,1); state=label(item.state,'badge'); top.addWidget(state); l.addLayout(top)
         meta=label('Leyendo metadatos…','muted'); l.addWidget(meta); progress=ContrastProgressBar(); progress.setValue(0); l.addWidget(progress)
-        bottom=QHBoxLayout(); detail=label('','muted'); bottom.addWidget(detail,1); options=button('Resolución, audio y subtítulos',lambda:self.item_options(item)); options.setEnabled(False); bottom.addWidget(options); openbtn=button('Abrir salida',lambda:self.open_result(item)); openbtn.setEnabled(False); bottom.addWidget(openbtn); remove=button('Quitar',lambda:self.remove_item(item)); bottom.addWidget(remove); l.addLayout(bottom)
-        self.rows[item.path]=dict(frame=f,layout=l,state=state,meta=meta,progress=progress,detail=detail,options=options,open=openbtn,remove=remove,editor=None)
+        bottom=QHBoxLayout(); detail=label('','muted');detail.setWordWrap(True); bottom.addWidget(detail,1); options=button('Resolución, audio y subtítulos',lambda:self.item_options(item)); options.setEnabled(False); bottom.addWidget(options); retrybtn=button('Reintentar guardado',lambda:self.retry_save(item));retrybtn.hide();bottom.addWidget(retrybtn); openbtn=button('Abrir salida',lambda:self.open_result(item)); openbtn.setEnabled(False); bottom.addWidget(openbtn); remove=button('Quitar',lambda:self.remove_item(item)); bottom.addWidget(remove); l.addLayout(bottom)
+        self.rows[item.path]=dict(frame=f,layout=l,state=state,meta=meta,progress=progress,detail=detail,options=options,retry_save=retrybtn,open=openbtn,remove=remove,editor=None)
         self.queue_layout.insertWidget(self.queue_layout.count()-1,f)
     def refresh_row(self,item):
         r=self.rows.get(item.path)
         if not r:return
         r['state'].setText(item.state)
         if item.info:r['meta'].setText(f"{fmt_time(item.info['duration'])}  ·  {item.info['width']}×{item.info['height']}  ·  {fmt_size(item.info['size'])}  →  MP4 / {item.options.codec.upper()} / {('sin límite · calidad alta' if item.options.unlimited else f'máximo {item.options.max_gb:g} GB')} · {dict((v,k) for k,v in MODES).get(item.options.mode,'Automático')}")
-        r['options'].setEnabled(item.info is not None and not self.active); r['remove'].setEnabled(not (self.active and getattr(self,'_current_path',None)==item.path)); r['open'].setEnabled(bool(item.output))
-        if r.get('editor'):r['editor'].setEnabled(not self.active)
+        r['options'].setEnabled(item.info is not None and not self.active and not self.saving and not item.recovery_target); r['remove'].setEnabled(not (self.active and getattr(self,'_current_path',None)==item.path) and not (self.saving and item.state=='Guardando')); r['open'].setEnabled(bool(item.output))
+        r['options'].setVisible(not bool(item.recovery_target))
+        r['retry_save'].setVisible(bool(item.recovery_target));r['retry_save'].setEnabled(bool(item.recovery_target) and not self.active and not self.saving)
+        r['open'].setText('Abrir recuperación' if item.recovery_target else 'Abrir salida')
+        if r.get('editor'):r['editor'].setEnabled(not self.active and not self.saving)
     def on_metadata(self,path,info):
         i=self.find(path)
         if not i:return
@@ -355,7 +365,7 @@ class MainWindow(QMainWindow):
                 self._run_processed.remove(item.path);self.completed_count-=1
             self.total_count=len(self._run_paths)
             self.log(f'Retirado de la cola: {Path(item.path).name}. Total actual: {self.total_count} videos.')
-        self.items.remove(item); self.rows.pop(item.path)['frame'].deleteLater(); self.empty.setVisible(not self.items); self.update_title(); self.persist_queue()
+        self.items.remove(item); self.rows.pop(item.path)['frame'].deleteLater(); self.empty.setVisible(not self.items); self.update_title(); self.persist_queue();self._update_recovery_notice()
         if self.active:self._refresh_run_summary();self._process_next()
     def clear_finished(self):
         for i in self.items[:]:
@@ -364,7 +374,7 @@ class MainWindow(QMainWindow):
     def open_result(self,item):
         if item.output:QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(item.output).parent)))
     def start(self):
-        if self.active:return
+        if self.active or self.saving:return
         for row in self.rows.values():
             if row.get('editor') and not row['editor'].apply():return
         batch=[i for i in self.items if i.info and i.state in ('Pendiente','Error','Cancelado')]
@@ -413,6 +423,7 @@ class MainWindow(QMainWindow):
             try:
                 out=engine.compress(item.path,item.output_dir or str(Path(item.path).parent),dataclasses.replace(item.options),control=control,progress=lambda d,p=item.path:self.bridge.progress.emit(p,d),log=self.bridge.event.emit,ffmpeg=self.settings.get('ffmpeg') or None,ffprobe=self.settings.get('ffprobe') or None)
                 self.bridge.result.emit(item.path,'Completado',str(out))
+            except engine.OutputPublishError as exc:self.bridge.result.emit(item.path,'Guardado pendiente',json.dumps(dict(recovery_path=str(exc.recovery_path),desired_target=str(exc.desired_target),message=str(exc)),ensure_ascii=False))
             except engine.EncodeCancelled:self.bridge.result.emit(item.path,'Cancelado','')
             except Exception as exc:self.bridge.result.emit(item.path,'Error',str(exc))
         self.worker=threading.Thread(target=run,daemon=True); self.worker.start()
@@ -428,12 +439,69 @@ class MainWindow(QMainWindow):
         i=self.find(path)
         if not i:return
         i.state=state; self.completed_count+=1
-        if state=='Completado':
-            i.output=value; self.rows[path]['progress'].setValue(100); size=Path(value).stat().st_size; saved=1-size/i.info['size']; self.rows[path]['detail'].setText(f'{fmt_size(size)} · ahorro {saved:.0%} · límite verificado'); self.log(f'Completado: {value}')
-        else:self.rows[path]['detail'].setText(value[:180] or state); self.log(f'{Path(path).name}: {state} {value}')
+        self._apply_output_result(i,state,value)
         self.refresh_row(i); self.persist_queue()
         self._run_processed.add(path);self._current_path=None;self._current_percent=0.;self.control=None
         self._refresh_run_summary();QTimer.singleShot(0,self._process_next)
+    def _apply_output_result(self,item,state,value):
+        row=self.rows[item.path]
+        if state=='Guardado pendiente':
+            data=json.loads(value);item.output=data['recovery_path'];item.recovery_target=data['desired_target'];item.state=state
+            row['progress'].setValue(100);row['detail'].setText('Compresión terminada · guardado pendiente; puedes reintentar sin comprimir otra vez.')
+            row['detail'].setToolTip(data['message']);self.log(data['message'])
+            self.pending_saves[item.path]=dict(path=item.path,output=item.output,desired_target=item.recovery_target,info=item.info,options=dataclasses.asdict(item.options),output_dir=item.output_dir)
+            self._persist_pending_saves()
+        elif state=='Completado':
+            item.output=value;item.recovery_target=None;item.state=state;row['progress'].setValue(100)
+            size=Path(value).stat().st_size;saved=1-size/item.info['size'] if item.info and item.info.get('size') else 0
+            row['detail'].setText(f'{fmt_size(size)} · ahorro {saved:.0%} · '+('calidad sin límite de tamaño' if item.options.unlimited else 'límite verificado'))
+            self.log(f'Completado: {value}');self.pending_saves.pop(item.path,None);self._persist_pending_saves()
+        else:
+            row['detail'].setText(value[:180] or state);self.log(f'{Path(item.path).name}: {state} {value}')
+    def _load_pending_saves(self):
+        try:
+            records=json.loads((DATA/'pending-saves.json').read_text(encoding='utf-8'))
+            if isinstance(records,list):self.pending_saves={r['path']:r for r in records if isinstance(r,dict) and isinstance(r.get('path'),str) and r.get('desired_target') and Path(r.get('output') or '').is_file()}
+        except (OSError,ValueError,TypeError):pass
+        self._update_recovery_notice()
+        if self.pending_saves:self.log(f'Hay {len(self.pending_saves)} videos ya comprimidos pendientes de guardar. Usa Recuperar guardados pendientes.')
+    def _persist_pending_saves(self):
+        try:
+            DATA.mkdir(parents=True,exist_ok=True);temp=DATA/'pending-saves.tmp';temp.write_text(json.dumps(list(self.pending_saves.values()),ensure_ascii=False),encoding='utf-8');os.replace(temp,DATA/'pending-saves.json')
+        except OSError as exc:self.log('No se pudo registrar la recuperación; el MP4 se conserva en la ruta indicada: '+str(exc))
+        self._update_recovery_notice()
+    def _update_recovery_notice(self):
+        missing=sum(not self.find(path) for path in self.pending_saves)
+        self.recovery_notice.setVisible(missing>0);self.recovery_notice.setText(f'Recuperar guardados pendientes ({missing})')
+    def restore_pending_saves(self):
+        for record in list(self.pending_saves.values()):
+            if self.find(record['path']) or not Path(record['output']).is_file():continue
+            item=Item(record['path'],self.settings)
+            try:item.options=engine.CompressionOptions(**record.get('options',{}))
+            except (ValueError,TypeError):pass
+            item.info=record.get('info');item.state='Guardado pendiente';item.output=record['output'];item.recovery_target=record['desired_target'];item.output_dir=record.get('output_dir','')
+            self.items.append(item);self.build_row(item);self.rows[item.path]['progress'].setValue(100);self.rows[item.path]['detail'].setText('Video ya comprimido · reintenta únicamente el guardado.');self.refresh_row(item)
+        self.empty.setVisible(not self.items);self.update_title();self._update_recovery_notice()
+    def retry_save(self,item):
+        if self.active or self.saving or not item.recovery_target:return
+        self.saving=True;item.state='Guardando';self.start_btn.setEnabled(False);self.ai_btn.setEnabled(False)
+        for other in self.items:self.refresh_row(other)
+        recovery=Path(item.output);desired=Path(item.recovery_target)
+        def run():
+            try:
+                output=engine.finalize_output(recovery,desired,source=item.path,log=self.bridge.event.emit)
+                engine.cleanup_recovery_workspace(recovery,log=self.bridge.event.emit)
+                self.bridge.save_result.emit(item.path,'Completado',str(output))
+            except Exception as exc:
+                data=dict(recovery_path=str(getattr(exc,'recovery_path',recovery)),desired_target=str(getattr(exc,'desired_target',desired)),message=str(exc))
+                self.bridge.save_result.emit(item.path,'Guardado pendiente',json.dumps(data,ensure_ascii=False))
+        self.save_worker=threading.Thread(target=run,daemon=True);self.save_worker.start()
+    def on_save_result(self,path,state,value):
+        self.saving=False;self.start_btn.setEnabled(True);self.ai_btn.setEnabled(True)
+        item=self.find(path)
+        if item:self._apply_output_result(item,state,value)
+        for other in self.items:self.refresh_row(other)
+        self.persist_queue()
     def on_done(self):
         self.active=False; self.control=None; self.paused=False; self.pause_btn.setText('Pausar'); self.pause_btn.setEnabled(False); self.stop_btn.setEnabled(False); self.start_btn.setEnabled(True); self.ai_btn.setEnabled(True); self.total_progress.setValue(int(self.completed_count/max(1,self.total_count)*100)); self.status.setText(f'Cola finalizada · {self.completed_count} procesados.');
         for i in self.items:self.refresh_row(i)
@@ -448,7 +516,7 @@ class MainWindow(QMainWindow):
     def ask_ai(self):
         batch=[i for i in self.items if i.info and i.state in ('Pendiente','Error','Cancelado')]
         if not batch:QMessageBox.information(self,'IA local','Agrega al menos un video para recomendar ajustes.');return
-        if self.ai_busy or self.active:return
+        if self.ai_busy or self.active or self.saving:return
         self.ai_busy=True; self.ai_btn.setEnabled(False); self.start_btn.setEnabled(False); self.log('Consultando el modelo local. Solo recibe metadatos técnicos; no recibe el video.')
         snapshot=[(i.path,dict(i.info),(None if i.options.unlimited else i.options.max_gb)) for i in batch]
         def run():
@@ -473,7 +541,7 @@ class MainWindow(QMainWindow):
         self.ai_busy=False; self.ai_btn.setEnabled(True); self.start_btn.setEnabled(True)
         if message:self.log(message); QMessageBox.warning(self,'IA local',message)
     def open_settings(self):
-        if self.active:QMessageBox.information(self,'Configuración','Detén o termina la cola antes de cambiar los motores.');return
+        if self.active or self.saving:QMessageBox.information(self,'Configuración','Detén o termina la cola antes de cambiar los motores.');return
         from settings_dialog import SettingsDialog
         d=SettingsDialog(dict(self.settings),self)
         from popups import show_popup
@@ -530,7 +598,7 @@ class MainWindow(QMainWindow):
     def closeEvent(self,event):
         if self._allow_close:event.accept();return
         if self._closing:event.ignore();return
-        if self.active or self.downloading or self.ai_busy:
+        if self.active or self.saving or self.downloading or self.ai_busy:
             QMessageBox.information(self,'Trabajo en curso','Espera a que termine la IA o detén las tareas antes de cerrar.');event.ignore();return
         self.persist_queue()
         if self._animate_windows:

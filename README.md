@@ -2,11 +2,11 @@
 
 <p align="center"><img src="assets/mb-logo-02.png" width="180" alt="MB Compresor de Video IA"></p>
 
-Compresor de escritorio para Windows de 64 bits. Exporta videos locales a MP4 de alta calidad con control de tamaño máximo. Versión **1.0.42**.
+Compresor de escritorio para Windows de 64 bits. Exporta videos locales a MP4 de alta calidad con control de tamaño máximo. Versión **1.0.43**.
 
 ## Descargar
 
-En [Releases](https://github.com/floresroldanluis/MBCompresorVideoIA/releases/latest), descarga **MBCompresorVideoIA-Setup-v1.0.42-windows-x64.exe** y sigue el asistente. Incluye FFmpeg y FFprobe; no requiere Python. Para usar la versión portátil, extrae toda la carpeta del ZIP antes de abrir `MB Compresor Pro.exe`.
+En [Releases](https://github.com/floresroldanluis/MBCompresorVideoIA/releases/latest), descarga **MBCompresorVideoIA-Setup-v1.0.43-windows-x64.exe** y sigue el asistente. Incluye FFmpeg y FFprobe; no requiere Python. Para usar la versión portátil, extrae toda la carpeta del ZIP antes de abrir `MB Compresor Pro.exe`.
 
 ## Funciones
 
@@ -69,3 +69,13 @@ El instalador y ZIP publicados ya incluyen este complemento. No requieren CUDA T
 ## Optimización de codificación 1.0.41
 
 Revisada con Astra: VBR por tamaño en NVIDIA para reducir reintentos, análisis CPU reutilizable y copia de audio AAC compatible sin pérdida adicional cuando cabe en el presupuesto. No cambia el códec elegido ni reduce la resolución para acelerar. [Mediciones y límites de la comparación](MEJORAS_CODIFICACION.md).
+
+## Guardado y Full HD 1.0.43
+
+El MP4 se publica sin crear un archivo vacío que pueda bloquearse. Los bloqueos de Windows se reintentan hasta20segundos; si persisten, el archivo completo se conserva y puede guardarse con Reintentar guardado, sin recodificar. Recuperar guardados pendientes permite recuperar esas filas después de reiniciar manteniendo la cola inicialmente vacía.
+
+Full HD limita a1920×1080 conservando proporción y sin ampliar videos pequeños. El perfil de alta calidad y audio512kbps es el predeterminado; el detalle alcanzable depende del origen y del límite deGB elegido.
+
+Actualizar motores comprueba FFmpeg, FFprobe y NVIDIA compatible, informa cuando no puede verificar versiones y conserva respaldos si Windows bloquea una sustitución. yt-dlp y Deno no son requisitos de la compresión local. No se instalan controladores gráficos ni CUDA Toolkit.
+
+Pruebas:96 aprobadas y1omitida por permisos de symlink. Incluyen bloqueos Windows reales, publicación concurrente, recuperación sin recodificar, Full HD y límites de tamaño.

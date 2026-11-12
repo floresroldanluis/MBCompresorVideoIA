@@ -25,6 +25,75 @@ from dataclasses import dataclass, field
 class EncodeError(RuntimeError): pass
 class EncodeCancelled(EncodeError): pass
 
+class OutputPublishError(EncodeError):
+    """A verified MP4 is intact at recovery_path and can be saved again."""
+    cancelled=False
+    def __init__(self, message, recovery_path, desired_target):
+        self.recovery_path=Path(recovery_path)
+        self.desired_target=Path(desired_target)
+        super().__init__(f'{message}\nMP4 completo conservado en: {self.recovery_path}')
+
+class OutputPublishCancelled(OutputPublishError, EncodeCancelled):
+    cancelled=True
+
+PUBLISH_RETRY_SECONDS=20.0
+PUBLISH_RETRY_INTERVAL=.25
+
+
+def finalize_output(result, desired_target, control=None, log=None, source=None):
+    """Save an already verified MP4, including one retained after a failed save.
+
+    No existing path is replaced. Windows rename reserves and publishes the name
+    in one atomic operation, avoiding an empty .mp4 that Explorer/AV can open.
+    The caller owns the result's work directory and its eventual cleanup.
+    """
+    result=Path(result).resolve(); desired_target=Path(desired_target)
+    desired_target=desired_target.parent.resolve()/desired_target.name
+    source=Path(source).resolve() if source is not None else None
+    control=control or Control(); log=log or (lambda message: None)
+    if result==source or result==desired_target:
+        raise OutputPublishError('La ruta del MP4 pendiente no es válida para guardar.',result,desired_target)
+    try:
+        if result.stat().st_size<=0:
+            raise OutputPublishError('El MP4 pendiente está vacío.',result,desired_target)
+    except OSError as exc:
+        raise OutputPublishError(f'No se pudo acceder al MP4 pendiente: {exc}',result,desired_target) from exc
+    deadline=time.monotonic()+PUBLISH_RETRY_SECONDS
+    waiting=False
+    for index in range(10000):
+        target=desired_target.with_name(desired_target.stem+(f'_{index}' if index else '')+desired_target.suffix)
+        if target==source:continue
+        while True:
+            if control.cancelled.is_set():
+                raise OutputPublishCancelled('Guardado cancelado; puedes reintentarlo sin volver a comprimir.',result,desired_target)
+            try:
+                if os.name=='nt':
+                    # Unlike os.replace, Windows rename never overwrites a path
+                    # another queue or application created in the meantime.
+                    os.rename(result,target)
+                else:
+                    # Both paths are on the output volume. link is exclusive on
+                    # POSIX, where rename would silently replace an existing file.
+                    os.link(result,target)
+                    try:result.unlink()
+                    except OSError:pass  # The caller cleans up this leftover link.
+            except FileExistsError:
+                break
+            except OSError as exc:
+                remaining=deadline-time.monotonic()
+                if getattr(exc,'winerror',None) not in (32,33):
+                    raise OutputPublishError(f'No se pudo guardar el MP4: {exc}',result,desired_target) from exc
+                if remaining<=0:
+                    raise OutputPublishError('Windows mantiene el archivo ocupado. Puedes reintentar el guardado sin volver a comprimir.',result,desired_target) from exc
+                if not waiting:
+                    log(f'MP4 completado. Windows mantiene un archivo ocupado; esperando hasta {PUBLISH_RETRY_SECONDS:g} s para guardar {target.name}.')
+                    waiting=True
+                control.cancelled.wait(min(PUBLISH_RETRY_INTERVAL,remaining))
+                continue
+            if waiting:log('Archivo liberado; el MP4 completo se ha guardado.')
+            return target
+    raise OutputPublishError('No se pudo elegir un nombre de salida libre.',result,desired_target)
+
 def _flags():
     return {'creationflags': subprocess.CREATE_NO_WINDOW} if os.name == 'nt' else {}
 
@@ -116,6 +185,57 @@ def _hide_work_directory(directory, log):
         attributes=kernel.GetFileAttributesW(str(directory))
         if attributes==0xffffffff or not kernel.SetFileAttributesW(str(directory),attributes|2):
             log('No se pudo ocultar la carpeta temporal; la compresión puede continuar.')
+
+def _reveal_recovery_directory(directory, desired_target, log):
+    try:
+        owned_files={}
+        for item in directory.iterdir():
+            if item.name!='result.mp4' and item.is_file() and not item.is_symlink():
+                stat=item.stat()
+                owned_files[item.name]=[stat.st_dev,stat.st_ino,stat.st_size,stat.st_mtime_ns]
+        marker={'owner':'MBCompresorPro.output-recovery.v1','directory':str(directory),
+                'desired_target':str(desired_target),'files':owned_files}
+        (directory/'recovery.json').write_text(json.dumps(marker,ensure_ascii=False),encoding='utf-8')
+    except OSError as exc:
+        log(f'No se pudo registrar la carpeta de recuperación: {exc}')
+    if os.name=='nt':
+        kernel=ctypes.WinDLL('kernel32',use_last_error=True)
+        kernel.GetFileAttributesW.argtypes=[ctypes.c_wchar_p];kernel.GetFileAttributesW.restype=ctypes.c_uint32
+        kernel.SetFileAttributesW.argtypes=[ctypes.c_wchar_p,ctypes.c_uint32];kernel.SetFileAttributesW.restype=ctypes.c_int
+        attributes=kernel.GetFileAttributesW(str(directory))
+        if attributes!=0xffffffff:
+            kernel.SetFileAttributesW(str(directory),attributes&~2)
+    log(f'Guardado pendiente. MP4 completo conservado en: {directory / "result.mp4"}')
+
+
+def cleanup_recovery_workspace(result_path, log=None):
+    """Remove only unchanged work files recorded when this recovery was made.
+
+    Call after finalize_output succeeds. Unknown or changed files are retained;
+    a directory without our recovery marker is never cleaned up.
+    """
+    result=Path(result_path).resolve(); directory=result.parent
+    if result.name!='result.mp4' or not directory.name.startswith('.mb-compress-') or result.exists():
+        return False
+    manifest=directory/'recovery.json'
+    try:
+        marker=json.loads(manifest.read_text(encoding='utf-8'))
+        if marker.get('owner')!='MBCompresorPro.output-recovery.v1' or marker.get('directory')!=str(directory):return False
+        for name,identity in marker.get('files',{}).items():
+            if Path(name).name!=name or any(c in name for c in '/\\') or name in ('result.mp4','recovery.json'):continue
+            path=directory/name
+            if path.is_symlink():continue
+            try:
+                stat=path.stat()
+                if [stat.st_dev,stat.st_ino,stat.st_size,stat.st_mtime_ns]==identity:path.unlink()
+            except FileNotFoundError:pass
+        manifest.unlink()
+        directory.rmdir()
+        return True
+    except (OSError,ValueError,TypeError,AttributeError) as exc:
+        if log:log(f'La carpeta de trabajo se conserva: {directory} ({exc})')
+        return False
+
 
 def _retry_video_bitrate(result, bitrate, cap, duration, audio_bitrate, ffprobe):
     """Reduce video only: audio, subtitles and container bytes do not shrink with it."""
@@ -246,6 +366,9 @@ def compress(source, output_dir, options, control=None, progress=None, log=None,
     else:
         log('Sin límite de tamaño: calidad visual alta (CRF/CQ 18), sin reducir bitrate para alcanzar GB. El tamaño final depende del contenido.')
     height=min(info['height'],options.height or info['height']); width=info['width']
+    if options.height:
+        max_width=round(options.height*16/9/2)*2
+        height=min(height,int(info['height']*max_width/width))
     if height<2: raise EncodeError('Resolución no válida.')
     if options.local_ai and not options.unlimited:
         # Offline adaptive bitrate-per-pixel heuristic; explicitly not a neural model.
@@ -269,8 +392,12 @@ def compress(source, output_dir, options, control=None, progress=None, log=None,
     preset={'rapido':'veryfast','equilibrado':'medium','calidad':'slow'}.get(options.speed,options.speed)
     if options.mode=='cpu':preset='slow'
     if preset not in ('ultrafast','superfast','veryfast','faster','fast','medium','slow','slower','veryslow'): raise EncodeError('Velocidad no válida.')
-    with tempfile.TemporaryDirectory(prefix='.mb-compress-',dir=out) as temp:
-        temp=Path(temp); result=temp/'result.mp4'; stats=temp/'pass'
+    stem=Path(output_name).stem if output_name is not None else source.stem
+    desired_target=out/(stem+'.mp4')
+    temp=Path(tempfile.mkdtemp(prefix='.mb-compress-',dir=out))
+    preserve_result=False
+    try:
+        result=temp/'result.mp4'; stats=temp/'pass'
         _hide_work_directory(temp,log)
         space_guard=DiskSpaceGuard(out,log)
         analysis_ready=False
@@ -336,22 +463,23 @@ def compress(source, output_dir, options, control=None, progress=None, log=None,
                     backend='cpu';ffmpeg=primary_ffmpeg;continue
                 raise
             actual=result.stat().st_size
-            if options.unlimited or actual<=cap: break
+            if actual<=0:raise EncodeError('FFmpeg no produjo un MP4 válido; el archivo está vacío.')
+            if options.unlimited or actual<=cap:
+                preserve_result=True
+                break
             bitrate=_retry_video_bitrate(result,bitrate,cap,duration,audio_budget,ffprobe)
             log('Se ajustará el bitrate de video para cumplir el tamaño máximo, conservando las pistas seleccionadas.')
             if bitrate<10000: raise EncodeError('El límite solicitado no permite una salida válida.')
         else: raise EncodeError('No se alcanzó el tamaño máximo; no se publicó ningún archivo.')
-        if control.cancelled.is_set(): raise EncodeCancelled('Compresión cancelada.')
-        # Reserve each candidate exclusively, then replace reservation atomically.
-        for i in range(10000):
-            stem=Path(output_name).stem if output_name is not None else source.stem
-            target=out/(stem+(f'_{i}' if i else '')+'.mp4')
-            if target==source: continue
-            try: fd=os.open(target,os.O_CREAT|os.O_EXCL|os.O_WRONLY); os.close(fd)
-            except FileExistsError: continue
-            try: os.replace(result,target)
-            except BaseException: target.unlink(missing_ok=True); raise
-            if progress: progress(dict(percent=100,speed=0,eta=0,pass_number=total_passes,total_passes=total_passes,backend=backend,status='Completado'))
-            log(f'Guardado: {target.name} ({actual/1e6:.2f} MB).')
-            return target
-        raise EncodeError('No se pudo elegir un nombre de salida libre.')
+        target=finalize_output(result,desired_target,control,log,source)
+        preserve_result=False
+        if progress: progress(dict(percent=100,speed=0,eta=0,pass_number=total_passes,total_passes=total_passes,backend=backend,status='Completado'))
+        log(f'Guardado: {target.name} ({actual/1e6:.2f} MB).')
+        return target
+    finally:
+        if preserve_result:
+            _reveal_recovery_directory(temp,desired_target,log)
+        else:
+            # A scanner may briefly retain analysis files too. Cleanup must not
+            # turn a successfully published MP4 into a reported encode failure.
+            shutil.rmtree(temp,ignore_errors=True)

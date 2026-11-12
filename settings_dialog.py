@@ -68,13 +68,14 @@ class SettingsDialog(PopupDialog):
         self.fields['releases_url'].textChanged.connect(self.invalidate_release)
         separator=QFrame();separator.setFrameShape(QFrame.HLine);separator.setStyleSheet('color:#d9e1ee;margin-top:8px;margin-bottom:8px;');self.form.addWidget(separator)
         self.section('Motores de descarga')
+        self.note('Motores de compresión: FFmpeg, FFprobe y componente NVIDIA. yt-dlp/Deno no se utilizan para comprimir archivos locales.')
         self.motor_status=QLabel('Estado: comprobación pendiente…');self.motor_status.setWordWrap(True);self.motor_status.setTextFormat(Qt.RichText)
         self.motor_status.setStyleSheet('background:#e9f0fa;color:#132c49;border-radius:12px;padding:16px;line-height:1.6')
         self.form.addWidget(self.motor_status)
         motor_actions=QHBoxLayout();self.motor_buttons=[]
         for title,callback in [('Actualizar motores',self.update_downloader),('Reparar FFmpeg',self.repair_engines)]:
             b=QPushButton(title);b.setFixedHeight(44);b.clicked.connect(callback);motor_actions.addWidget(b);self.motor_buttons.append(b)
-        self.form.addLayout(motor_actions);self.motor_busy=False
+        self.form.addLayout(motor_actions);self.motor_busy=False;self.motor_refresh_pending=False
         self.note('Compara las versiones instaladas con sus publicaciones oficiales. Si no hay conexión o no se pueden comparar, lo indica sin afirmar que estén actualizadas.')
         self.status = QLabel('Listo.'); self.status.setWordWrap(True); self.form.addWidget(self.status)
         self.form.addStretch()
@@ -130,13 +131,20 @@ class SettingsDialog(PopupDialog):
         return values
     def run_motor_task(self,fn,callback,text):
         if self.motor_busy:return
+        parent=self.parent()
+        if getattr(parent,'active',False) or getattr(parent,'ai_busy',False):
+            self.motor_status.setText('Espera a que terminen las tareas actuales antes de comprobar, actualizar o reparar motores.')
+            return
         self.motor_busy=True;self.motor_status.setText(html.escape(text))
         for b in self.motor_buttons:b.setEnabled(False)
         task=self.run_task(fn,callback)
-        task.failed.connect(lambda error:self.motor_status.setText('No se pudo completar: '+html.escape(error)+'<br>Se conserva el motor anterior.'))
+        task.failed.connect(lambda error:self.motor_status.setText('No se pudo completar: '+html.escape(error)))
         def finished():
             self.motor_busy=False
             for b in self.motor_buttons:b.setEnabled(True)
+            if self.motor_refresh_pending:
+                self.motor_refresh_pending=False
+                QTimer.singleShot(0,self.check_engines)
         task.finished.connect(finished)
     def show_motor_report(self,report):
         rows=['Estado: <b>'+('Listo para comprimir' if report.get('ready') else 'Requiere atención')+'</b>']
@@ -163,6 +171,7 @@ class SettingsDialog(PopupDialog):
         for encoder,title in [('libx264','CPU H.264'),('libx265','CPU H.265')]:
             rows.append(title+': <b>'+('Instalado en FFmpeg · dos pasadas' if encoder in encoders else 'No instalado')+'</b>')
         rows.append('<small>Los codificadores incluidos se actualizan con FFmpeg. El motor NVIDIA compatible se conserva mientras funcione.</small>')
+        rows.append('<small>yt-dlp y Deno no son necesarios para comprimir archivos locales.</small>')
         rows.append('Automático: <b>NVIDIA si funciona; CPU como alternativa</b>')
         rows.append('Modo autónomo: <b>'+('Sí, motores incluidos' if report.get('autonomous') else 'Usa uno o más motores externos')+'</b>')
         self.motor_status.setText('<br>'.join(rows));self.status.setText('Comprobación de motores terminada.')
@@ -180,7 +189,7 @@ class SettingsDialog(PopupDialog):
         messages=result.get('messages',[])
         self.status.setText('\n'.join(messages)+'\nGuarda los cambios para conservar las rutas.')
         self.motor_status.setText('Operación terminada.<br>'+html.escape('\n'.join(messages)).replace('\n','<br>'))
-        QTimer.singleShot(150,self.check_engines)
+        self.motor_refresh_pending=True
     def check_release(self):
         if self.update_busy:return
         from app_updates import check_update

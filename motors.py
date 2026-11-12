@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.request
 import zipfile
 
@@ -77,10 +78,15 @@ def _latest():
         ('ffmpeg', 'https://www.gyan.dev/ffmpeg/builds/release-version'),):
         try:
             raw = _read(url).decode()
-            values[name] = json.loads(raw)['tag_name'].lstrip('v') if name != 'ffmpeg' else raw.strip()
+            version = raw.strip()
+            if not re.fullmatch(r'\d+\.\d+(?:\.\d+)?', version):
+                raise RuntimeError('Versión oficial no reconocida.')
+            values[name] = version
         except Exception as exc:
             errors[name] = str(exc)
     values['ffprobe'] = values.get('ffmpeg')
+    if 'ffmpeg' in errors:
+        errors['ffprobe'] = errors['ffmpeg']
     return values, errors
 
 
@@ -117,6 +123,68 @@ def inspect_motors(settings, online=True):
     return {'entries': entries, 'ready': all(e['healthy'] for e in entries.values()), 'autonomous': autonomous, 'gpu': gpu,'installed_encoders':sorted(encoders),'nvenc':nvenc,'nvidia_version':nvidia_version,'nvidia_device':nvidia_info()}
 
 
+def _retry_file_operation(operation, attempts=7):
+    """Allow short antivirus/Windows sharing locks to clear without looping forever."""
+    for attempt in range(attempts):
+        try:
+            return operation()
+        except OSError as exc:
+            if getattr(exc, 'winerror', None) not in (5, 32, 33) or attempt == attempts - 1:
+                raise
+            time.sleep(0.15 * (attempt + 1))
+
+
+def _publish_staged(staged, destination):
+    backups, published = {}, []
+    backup_folder = Path(tempfile.mkdtemp(prefix='motor-respaldo-', dir=destination))
+    recovery = []
+    target = None
+    try:
+        # Back up the complete pair before changing either executable.
+        for name, path in staged.items():
+            target = destination / path.name
+            if target.exists():
+                backup = backup_folder / (name + '.backup')
+                _retry_file_operation(lambda: shutil.copy2(target, backup))
+                backups[name] = backup
+        for name, path in staged.items():
+            target = destination / path.name
+            _retry_file_operation(lambda: path.replace(target))
+            published.append(name)
+    except OSError as exc:
+        failed_target = target
+        for name in reversed(published):
+            target = destination / (name + '.exe')
+            try:
+                if name in backups:
+                    _retry_file_operation(lambda: backups[name].replace(target))
+                else:
+                    _retry_file_operation(lambda: target.unlink(missing_ok=True))
+            except OSError as rollback_error:
+                if name in backups:
+                    recovery.append(f'{target}; copia anterior en {backups[name]} ({rollback_error})')
+                else:
+                    recovery.append(str(target))
+        message = f'No se pudo sustituir {failed_target}: {exc}.'
+        if getattr(exc, 'winerror', None) in (5, 32, 33):
+            message += ' El motor está en uso; espera a que terminen las tareas e inténtalo de nuevo.'
+        if recovery:
+            message += ' Revisa los archivos de recuperación: ' + ', '.join(recovery)
+        else:
+            message += ' Se conservaron los motores anteriores.'
+        raise RuntimeError(message) from exc
+    finally:
+        if not recovery:
+            # Backup files live outside the download staging folder so a failed
+            # rollback cannot lose them when that staging folder is removed.
+            try:
+                for backup in backup_folder.iterdir():
+                    _retry_file_operation(backup.unlink)
+                backup_folder.rmdir()
+            except OSError:
+                pass
+
+
 def _archive(url, checksum_url, names, destination, expected_sha256=None):
     """Extract only known executable basenames; validate before publishing as a group."""
     destination = Path(destination)
@@ -125,7 +193,7 @@ def _archive(url, checksum_url, names, destination, expected_sha256=None):
     if len(checksum_matches) != 1:
         raise RuntimeError('Suma SHA256 oficial inválida.')
     checksum = checksum_matches[0].lower()
-    with tempfile.TemporaryDirectory(prefix='motor-', dir=destination) as folder:
+    with tempfile.TemporaryDirectory(prefix='motor-', dir=destination, ignore_cleanup_errors=True) as folder:
         folder = Path(folder)
         archive = folder / 'download.zip'
         req = urllib.request.Request(url, headers={'User-Agent': 'MBCompresorPro/1.0'})
@@ -152,22 +220,7 @@ def _archive(url, checksum_url, names, destination, expected_sha256=None):
                 if not version:
                     raise RuntimeError(f'{name} no inició: {error}')
                 staged[name] = path
-        backups, published = {}, []
-        try:
-            for name, path in staged.items():
-                target = destination / path.name
-                if target.exists():
-                    backup = folder / (name + '.backup')
-                    shutil.copy2(target, backup); backups[name] = backup
-                path.replace(target); published.append(name)
-        except BaseException:
-            for name in published:
-                target = destination / (name + '.exe')
-                if name in backups:
-                    backups[name].replace(target)
-                else:
-                    target.unlink(missing_ok=True)
-            raise
+        _publish_staged(staged, destination)
     return {name: str(destination / (name + '.exe')) for name in names}
 
 
@@ -185,21 +238,27 @@ def _install_ffmpeg():
     base = 'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip'
     return _archive(base, base + '.sha256', ['ffmpeg', 'ffprobe'], managed_dir())
 
-def ensure_nvidia(settings=None,log=None):
-    from acceleration import find_nvenc,nvidia_info,compatible_candidates,COMPAT_URL,COMPAT_SHA256
+def ensure_nvidia(settings=None,log=None,allow_download=True):
+    from acceleration import find_nvenc,nvidia_info,compatible_candidates,COMPAT_URL,COMPAT_SHA256,COMPAT_VERSION
     log=log or (lambda _:None)
     primary=discover('ffmpeg',settings)
     if not primary:return ['Primero repara FFmpeg.']
     status=find_nvenc(primary)
     if status['available']:return ['Complemento NVIDIA NVENC verificado.']
     if not nvidia_info():return ['Sin GPU NVIDIA detectada. Automático usará CPU.']
+    for candidate in compatible_candidates(primary):
+        if Path(candidate).parent.name != 'nvenc':continue
+        version, error=_version(candidate,'ffmpeg')
+        if version and version.lstrip('v').split('-',1)[0] == COMPAT_VERSION:
+            return ['Complemento NVIDIA instalado (FFmpeg '+COMPAT_VERSION+'). NVENC no se pudo activar; Automático usará CPU. '+status.get('error','')]
+    if not allow_download:return ['NVIDIA NVENC no disponible. No se descargó el complemento porque no se pudo consultar la versión oficial; CPU sigue disponible.']
     log('Instalando complemento NVIDIA compatible con verificación SHA256…')
     paths=_archive(COMPAT_URL,None,['ffmpeg'],managed_dir()/'nvenc',expected_sha256=COMPAT_SHA256)
     status=find_nvenc(paths['ffmpeg'])
     return ['Complemento NVIDIA instalado y verificado.'] if status['available'] else ['Complemento NVIDIA instalado. El controlador no permite usar NVENC; Automático usará CPU. '+status['error']]
 
-def _with_nvidia(paths,settings,log,messages):
-    try:messages+=ensure_nvidia(settings,log)
+def _with_nvidia(paths,settings,log,messages,allow_download=True):
+    try:messages+=ensure_nvidia({**settings,**paths},log,allow_download=allow_download)
     except Exception as exc:messages+=['NVIDIA no pudo repararse; CPU sigue disponible. '+str(exc)]
     return {**paths,'messages':messages}
 
@@ -222,9 +281,19 @@ def repair_ffmpeg(settings, log=None):
 
 
 def update_motors(settings, log=None):
+    log=log or (lambda _:None)
+    log('Comprobando FFmpeg, FFprobe y compatibilidad NVIDIA NVENC…')
     state=inspect_motors(dict(settings,compression_only=True),online=True)
     entries=state['entries']
     if all(e['healthy'] and e['update_available'] is not True for e in entries.values()):
-        return _with_nvidia({n:e['path'] for n,e in entries.items()},settings,log,['Motores verificados. No hay actualizaciones confirmadas.'])
+        errors=list(dict.fromkeys(e.get('update_error','') for e in entries.values() if e.get('update_error')))
+        if errors:
+            messages=['FFmpeg y FFprobe funcionan. No se pudo comprobar si hay actualizaciones: '+'; '.join(errors)+'. Se conservaron los motores instalados.']
+        elif all(e['update_available'] is False for e in entries.values()):
+            messages=['FFmpeg y FFprobe comprobados con la versión oficial; no requieren actualización.']
+        else:
+            messages=['FFmpeg y FFprobe funcionan. La versión instalada no se puede comparar con la publicación oficial; actualización no comprobada. Se conservaron los motores instalados.']
+        return _with_nvidia({n:e['path'] for n,e in entries.items()},settings,log,messages,allow_download=not errors)
+    log('Descargando FFmpeg y FFprobe oficiales con verificación SHA256…')
     paths=_install_ffmpeg()
     return _with_nvidia(paths,{**settings,**paths},log,['FFmpeg y FFprobe actualizados y verificados con SHA256.'])
