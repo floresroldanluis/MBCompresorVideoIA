@@ -35,7 +35,7 @@ class EngineChecks(unittest.TestCase):
             original=source.read_bytes()
             output=compress(source,root,CompressionOptions(mode='cpu',max_gb=.0003,speed='rapido'))
             self.assertEqual(output.parent,source.parent)
-            self.assertEqual(output.name,'pelicula_1.mp4')
+            self.assertRegex(output.name,r'^pelicula_comprimido_[0-9a-f]{12}\.mp4$')
             self.assertEqual(source.read_bytes(),original)
             self.assertLessEqual(output.stat().st_size,300000)
     def test_invalid_track(self):
@@ -45,7 +45,7 @@ class EngineChecks(unittest.TestCase):
             with self.assertRaises(EncodeError): compress(self.source,self.root,CompressionOptions(mode='cpu',output_name=name))
         existing=self.root/'custom.mp4'; existing.write_bytes(b'keep')
         result=compress(self.source,self.root,CompressionOptions(mode='cpu',max_gb=.0003,speed='rapido',output_name='custom.mp4',downmix_audio=True))
-        self.assertEqual(result.name,'custom_1.mp4'); self.assertEqual(existing.read_bytes(),b'keep')
+        self.assertRegex(result.name,r'^custom_[0-9a-f]{12}\.mp4$'); self.assertEqual(existing.read_bytes(),b'keep')
         self.assertEqual(probe(result)['audio'][0]['channels'],2)
     def test_subtitle_burn_and_selectable(self):
         srt=self.root/'captions.srt'; srt.write_text('1\n00:00:00,000 --> 00:00:02,000\nHello world\n',encoding='utf-8')

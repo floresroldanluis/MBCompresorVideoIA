@@ -4,7 +4,7 @@ $pythonPath=Join-Path $projectRoot '.venv\Scripts\python.exe'
 $distRoot=Join-Path $projectRoot 'Aplicacion'
 $buildRoot=Join-Path $projectRoot '.build'
 $assetRoot=Join-Path $projectRoot 'assets'
-& $pythonPath -m PyInstaller --noconfirm --windowed --onedir --name 'MB Compresor Pro' --icon (Join-Path $assetRoot 'app-logo-02.ico') --add-data ($assetRoot+';assets') --hidden-import settings_dialog --hidden-import local_ai --hidden-import popups --hidden-import acceleration --exclude-module telethon --exclude-module yt_dlp --exclude-module PySide6.QtWebEngineCore --exclude-module PySide6.QtWebEngineWidgets --exclude-module PySide6.QtPdf --distpath $distRoot --workpath $buildRoot --specpath $buildRoot (Join-Path $projectRoot 'app.py')
+& $pythonPath -m PyInstaller --noconfirm --windowed --onedir --name 'MB Compresor Pro' --icon (Join-Path $assetRoot 'app-logo-02.ico') --add-data ($assetRoot+';assets') --hidden-import settings_dialog --hidden-import local_ai --hidden-import popups --hidden-import acceleration --hidden-import file_locks --exclude-module telethon --exclude-module yt_dlp --exclude-module PySide6.QtWebEngineCore --exclude-module PySide6.QtWebEngineWidgets --exclude-module PySide6.QtPdf --distpath $distRoot --workpath $buildRoot --specpath $buildRoot (Join-Path $projectRoot 'app.py')
 if($LASTEXITCODE -ne 0){throw 'La compilación falló.'}
 $packageRoot=Join-Path $distRoot 'MB Compresor Pro'
 # Qt 6.12 uses the Windows system ICU interface. An unrelated ICU from PATH

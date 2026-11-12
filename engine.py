@@ -14,12 +14,14 @@ import math
 import os
 from pathlib import Path
 import queue
+import re
 import shutil
 import sys
 import subprocess
 import tempfile
 import threading
 import time
+import uuid
 from dataclasses import dataclass, field
 
 class EncodeError(RuntimeError): pass
@@ -84,7 +86,15 @@ def finalize_output(result, desired_target, control=None, log=None, source=None)
                 if getattr(exc,'winerror',None) not in (32,33):
                     raise OutputPublishError(f'No se pudo guardar el MP4: {exc}',result,desired_target) from exc
                 if remaining<=0:
-                    raise OutputPublishError('Windows mantiene el archivo ocupado. Puedes reintentar el guardado sin volver a comprimir.',result,desired_target) from exc
+                    message='Windows mantiene el archivo ocupado. Puedes reintentar el guardado sin volver a comprimir.'
+                    try:
+                        from file_locks import describe_locking_processes
+                        detail=describe_locking_processes([result,target])
+                    except Exception:
+                        detail=''
+                    log(detail or 'Windows mantiene el archivo ocupado; no se pudo identificar el proceso que lo bloquea.')
+                    if detail:message+='\n'+detail
+                    raise OutputPublishError(message,result,desired_target) from exc
                 if not waiting:
                     log(f'MP4 completado. Windows mantiene un archivo ocupado; esperando hasta {PUBLISH_RETRY_SECONDS:g} s para guardar {target.name}.')
                     waiting=True
@@ -186,16 +196,31 @@ def _hide_work_directory(directory, log):
         if attributes==0xffffffff or not kernel.SetFileAttributesW(str(directory),attributes|2):
             log('No se pudo ocultar la carpeta temporal; la compresión puede continuar.')
 
-def _reveal_recovery_directory(directory, desired_target, log):
+def _file_identity(path):
+    stat=path.stat()
+    return [stat.st_dev,stat.st_ino,stat.st_size,stat.st_mtime_ns]
+
+
+def _analysis_file_name(name):
+    return bool(re.fullmatch(r'pass(?:-\d+\.log(?:\.mbtree)?|(?:\.cutree)?)(?:\.temp)?',name))
+
+
+def _work_result_name(name):
+    return bool(re.fullmatch(r'payload_[0-9a-f]{12}\.part',name))
+
+
+def _reveal_recovery_directory(directory, desired_target, log, result):
     try:
         owned_files={}
         for item in directory.iterdir():
-            if item.name!='result.mp4' and item.is_file() and not item.is_symlink():
-                stat=item.stat()
-                owned_files[item.name]=[stat.st_dev,stat.st_ino,stat.st_size,stat.st_mtime_ns]
-        marker={'owner':'MBCompresorPro.output-recovery.v1','directory':str(directory),
-                'desired_target':str(desired_target),'files':owned_files}
-        (directory/'recovery.json').write_text(json.dumps(marker,ensure_ascii=False),encoding='utf-8')
+            if _analysis_file_name(item.name) and item.is_file() and not item.is_symlink():
+                owned_files[item.name]=_file_identity(item)
+        marker={'owner':'MBCompresorPro.output-recovery.v2','directory':str(directory),
+                'desired_target':str(desired_target),'result_name':result.name,
+                'result_identity':_file_identity(result),'files':owned_files}
+        # An unrelated file added to the workspace must never be overwritten.
+        with (directory/'recovery.json').open('x',encoding='utf-8') as manifest:
+            json.dump(marker,manifest,ensure_ascii=False)
     except OSError as exc:
         log(f'No se pudo registrar la carpeta de recuperación: {exc}')
     if os.name=='nt':
@@ -205,7 +230,7 @@ def _reveal_recovery_directory(directory, desired_target, log):
         attributes=kernel.GetFileAttributesW(str(directory))
         if attributes!=0xffffffff:
             kernel.SetFileAttributesW(str(directory),attributes&~2)
-    log(f'Guardado pendiente. MP4 completo conservado en: {directory / "result.mp4"}')
+    log(f'Guardado pendiente. MP4 completo conservado en: {result}')
 
 
 def cleanup_recovery_workspace(result_path, log=None):
@@ -215,20 +240,31 @@ def cleanup_recovery_workspace(result_path, log=None):
     a directory without our recovery marker is never cleaned up.
     """
     result=Path(result_path).resolve(); directory=result.parent
-    if result.name!='result.mp4' or not directory.name.startswith('.mb-compress-') or result.exists():
+    if (result.name!='result.mp4' and not _work_result_name(result.name) or
+        not directory.name.startswith('.mb-compress-') or result.exists()):
         return False
     manifest=directory/'recovery.json'
     try:
+        if manifest.is_symlink():return False
+        manifest_identity=_file_identity(manifest)
         marker=json.loads(manifest.read_text(encoding='utf-8'))
-        if marker.get('owner')!='MBCompresorPro.output-recovery.v1' or marker.get('directory')!=str(directory):return False
+        if marker.get('directory')!=str(directory):return False
+        if marker.get('owner')=='MBCompresorPro.output-recovery.v1':
+            if result.name!='result.mp4':return False
+        elif marker.get('owner')=='MBCompresorPro.output-recovery.v2':
+            identity=marker.get('result_identity')
+            if (not _work_result_name(result.name) or marker.get('result_name')!=result.name or
+                not isinstance(identity,list) or len(identity)!=4 or
+                any(type(value) is not int for value in identity)):return False
+        else:return False
         for name,identity in marker.get('files',{}).items():
-            if Path(name).name!=name or any(c in name for c in '/\\') or name in ('result.mp4','recovery.json'):continue
+            if not _analysis_file_name(name):continue
             path=directory/name
             if path.is_symlink():continue
             try:
-                stat=path.stat()
-                if [stat.st_dev,stat.st_ino,stat.st_size,stat.st_mtime_ns]==identity:path.unlink()
+                if path.is_file() and _file_identity(path)==identity:path.unlink()
             except FileNotFoundError:pass
+        if manifest.is_symlink() or _file_identity(manifest)!=manifest_identity:return False
         manifest.unlink()
         directory.rmdir()
         return True
@@ -336,10 +372,13 @@ def compress(source, output_dir, options, control=None, progress=None, log=None,
         output_name=output_name.strip()
         if (not output_name or Path(output_name).name!=output_name or
             any(c in output_name for c in '<>:"/\\|?*') or
+            any(ord(c)<32 for c in output_name) or
             not output_name.lower().endswith('.mp4') or output_name.endswith(' ') or
             output_name.split('.')[0].upper() in {'CON','PRN','AUX','NUL',*[f'COM{i}' for i in range(1,10)],*[f'LPT{i}' for i in range(1,10)]}):
             raise EncodeError('El nombre de salida debe ser un nombre de archivo MP4 válido, sin carpetas.')
         if not output_name[:-4].strip('. '): raise EncodeError('El nombre de salida no puede estar vacío.')
+        if len(output_name[:-4].encode('utf-16-le'))>360:
+            raise EncodeError('El nombre base de salida es demasiado largo; usa hasta 180 caracteres.')
     start=float(options.trim_start); end=float(options.trim_end) if options.trim_end is not None else info['duration']
     if not 0<=start<end<=info['duration']+.01: raise EncodeError('Intervalo de recorte no válido.')
     duration=end-start
@@ -392,12 +431,18 @@ def compress(source, output_dir, options, control=None, progress=None, log=None,
     preset={'rapido':'veryfast','equilibrado':'medium','calidad':'slow'}.get(options.speed,options.speed)
     if options.mode=='cpu':preset='slow'
     if preset not in ('ultrafast','superfast','veryfast','faster','fast','medium','slow','slower','veryslow'): raise EncodeError('Velocidad no válida.')
-    stem=Path(output_name).stem if output_name is not None else source.stem
-    desired_target=out/(stem+'.mp4')
+    if output_name is not None:
+        stem=Path(output_name).stem
+    else:
+        # Leave room for the suffix on Windows, including names with surrogate pairs.
+        stem=source.stem.encode('utf-16-le')[:336].decode('utf-16-le',errors='ignore').rstrip('. ')+'_comprimido'
+    desired_target=out/(stem+'_'+uuid.uuid4().hex[:12]+'.mp4')
     temp=Path(tempfile.mkdtemp(prefix='.mb-compress-',dir=out))
     preserve_result=False
     try:
-        result=temp/'result.mp4'; stats=temp/'pass'
+        # A .part file avoids advertising an unfinished video to thumbnail handlers.
+        # Its muxer is specified explicitly rather than inferred from the extension.
+        result=temp/('payload_'+uuid.uuid4().hex[:12]+'.part'); stats=temp/'pass'
         _hide_work_directory(temp,log)
         space_guard=DiskSpaceGuard(out,log)
         analysis_ready=False
@@ -452,7 +497,7 @@ def compress(source, output_dir, options, control=None, progress=None, log=None,
                                     cmd+=['-c:a:'+str(index),'alac']
                                     log('Audio '+str(stream['index'])+': ALAC sin pérdida adicional para MP4.')
                         if options.codec=='h265':cmd+=['-tag:v','hvc1']
-                        cmd+=[str(result)]
+                        cmd+=['-f','mp4',str(result)]
                     cmd[1:1]=['-progress','pipe:1','-stats_period','0.3']
                     _run(cmd,control,duration,progress,progress_pass,log,space_guard,total_passes,backend)
                     if first_analysis:analysis_ready=True
@@ -478,7 +523,7 @@ def compress(source, output_dir, options, control=None, progress=None, log=None,
         return target
     finally:
         if preserve_result:
-            _reveal_recovery_directory(temp,desired_target,log)
+            _reveal_recovery_directory(temp,desired_target,log,result)
         else:
             # A scanner may briefly retain analysis files too. Cleanup must not
             # turn a successfully published MP4 into a reported encode failure.

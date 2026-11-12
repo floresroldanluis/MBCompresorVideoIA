@@ -46,7 +46,7 @@ class PublishOutputTests(unittest.TestCase):
         return path
 
     def fake_encode(self,cmd,*args):
-        if cmd[-1].endswith('result.mp4'):
+        if Path(cmd[-1]).suffix=='.part':
             result=Path(cmd[-1]);result.write_bytes(PAYLOAD)
             (result.parent/'pass-0.log').write_bytes(b'owned analysis')
 
@@ -127,7 +127,8 @@ class PublishOutputTests(unittest.TestCase):
                 self.compress(run=encode,messages=messages)
             pending=failure.exception
             self.assertFalse(pending.cancelled)
-            self.assertEqual(pending.desired_target,self.target)
+            self.assertEqual(pending.desired_target.parent,self.target.parent)
+            self.assertRegex(pending.desired_target.name,r'^final_[0-9a-f]{12}\.mp4$')
             self.assertEqual(pending.recovery_path.read_bytes(),PAYLOAD)
             self.assertFalse(self.target.exists())
             self.assertFalse(ctypes.windll.kernel32.GetFileAttributesW(str(pending.recovery_path.parent))&2)
@@ -197,7 +198,7 @@ class PublishOutputTests(unittest.TestCase):
     def test_oversized_output_is_not_retained_or_published(self):
         self.options.unlimited=False;self.options.max_gb=.0001
         def encode(cmd,*args):
-            if cmd[-1].endswith('result.mp4'):Path(cmd[-1]).write_bytes(b'x'*100001)
+            if Path(cmd[-1]).suffix=='.part':Path(cmd[-1]).write_bytes(b'x'*100001)
         with patch.object(engine,'_retry_video_bitrate',return_value=50000):
             with self.assertRaises(engine.EncodeError):self.compress(run=encode)
         self.assertFalse(list(self.root.glob('.mb-compress-*')))

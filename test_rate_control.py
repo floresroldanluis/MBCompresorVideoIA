@@ -44,7 +44,7 @@ class EncodingPlanChecks(unittest.TestCase):
             info=dict(duration=1,height=240,width=320,video={'index':0},audio=[],subtitles=[])
             def run(cmd,control,duration,callback,pn,log,guard,total,backend):
                 calls.append((cmd,pn,total))
-                if cmd[-1].endswith('result.mp4'):
+                if Path(cmd[-1]).suffix=='.part':
                     if cancel_retry and len(calls)>2:raise engine.EncodeCancelled('cancel')
                     size=120000 if oversize and len(calls)==2 else 80000
                     Path(cmd[-1]).write_bytes(b'0'*size)
@@ -142,7 +142,7 @@ class CappedAudioCopyChecks(unittest.TestCase):
             calls=[]
             def run(cmd,*args,**kwargs):
                 calls.append(cmd)
-                if cmd[-1].endswith('result.mp4'):Path(cmd[-1]).write_bytes(b'0'*80000)
+                if Path(cmd[-1]).suffix=='.part':Path(cmd[-1]).write_bytes(b'0'*80000)
             with patch('engine.probe',return_value=info),patch('engine._run',side_effect=run):
                 engine.compress(source,root,engine.CompressionOptions(mode='cpu',max_gb=.0001),ffmpeg='ffmpeg')
             # 760 kb/s total; 95 kb/s budget per audio track. Only the64kb/s

@@ -2,11 +2,11 @@
 
 <p align="center"><img src="assets/mb-logo-02.png" width="180" alt="MB Compresor de Video IA"></p>
 
-Compresor de escritorio para Windows de 64 bits. Exporta videos locales a MP4 de alta calidad con control de tamaño máximo. Versión **1.0.43**.
+Compresor de escritorio para Windows de 64 bits. Exporta videos locales a MP4 de alta calidad con control de tamaño máximo. Versión **1.0.44**.
 
 ## Descargar
 
-En [Releases](https://github.com/floresroldanluis/MBCompresorVideoIA/releases/latest), descarga **MBCompresorVideoIA-Setup-v1.0.43-windows-x64.exe** y sigue el asistente. Incluye FFmpeg y FFprobe; no requiere Python. Para usar la versión portátil, extrae toda la carpeta del ZIP antes de abrir `MB Compresor Pro.exe`.
+En [Releases](https://github.com/floresroldanluis/MBCompresorVideoIA/releases/latest), descarga **MBCompresorVideoIA-Setup-v1.0.44-windows-x64.exe** y sigue el asistente. Incluye FFmpeg y FFprobe; no requiere Python. Para usar la versión portátil, extrae toda la carpeta del ZIP antes de abrir `MB Compresor Pro.exe`.
 
 ## Funciones
 
@@ -79,3 +79,9 @@ Full HD limita a1920×1080 conservando proporción y sin ampliar videos pequeño
 Actualizar motores comprueba FFmpeg, FFprobe y NVIDIA compatible, informa cuando no puede verificar versiones y conserva respaldos si Windows bloquea una sustitución. yt-dlp y Deno no son requisitos de la compresión local. No se instalan controladores gráficos ni CUDA Toolkit.
 
 Pruebas:96 aprobadas y1omitida por permisos de symlink. Incluyen bloqueos Windows reales, publicación concurrente, recuperación sin recodificar, Full HD y límites de tamaño.
+
+## Nombres únicos 1.0.44
+
+Cada compresión genera un nombre final nuevo, también con nombres base personalizados. El temporal usa un identificador aleatorio y extensión .part, con contenedorMP4 explícito. Los archivos existentes y los originales no se sustituyen.
+
+Si Windows mantiene el bloqueo, siguen disponibles los reintentos y la recuperación de1.0.43. Un diagnóstico local de Restart Manager intenta mostrar qué aplicaciones usan los archivos. Es una consulta: no se cierran programas ni servicios, y algunos bloqueos no se pueden atribuir con esa API.
