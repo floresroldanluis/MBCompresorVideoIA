@@ -96,6 +96,7 @@ class PublishOutputTests(unittest.TestCase):
         for thread in threads:thread.join(10)
         self.assertFalse(any(t.is_alive() for t in threads));self.assertEqual(failures,[])
         self.assertEqual(len(set(outputs)),workers)
+        self.assertEqual({p.name for p in outputs},{f'final_{i}.mp4' for i in range(1,workers+1)})
         self.assertEqual({p.read_bytes() for p in outputs},{str(i).encode() for i in range(workers)})
         self.assertEqual(self.target.read_bytes(),b'existing untouched')
 
@@ -128,7 +129,7 @@ class PublishOutputTests(unittest.TestCase):
             pending=failure.exception
             self.assertFalse(pending.cancelled)
             self.assertEqual(pending.desired_target.parent,self.target.parent)
-            self.assertRegex(pending.desired_target.name,r'^final_[0-9a-f]{12}\.mp4$')
+            self.assertEqual(pending.desired_target.name,'final.mp4')
             self.assertEqual(pending.recovery_path.read_bytes(),PAYLOAD)
             self.assertFalse(self.target.exists())
             self.assertFalse(ctypes.windll.kernel32.GetFileAttributesW(str(pending.recovery_path.parent))&2)

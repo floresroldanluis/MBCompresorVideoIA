@@ -37,44 +37,68 @@ class UniqueNameChecks(unittest.TestCase):
         with patch.object(engine,'probe',return_value=self.info),patch.object(engine,'_run',side_effect=run or self.encode):
             return engine.compress(self.source,self.root,options,control=control,ffmpeg='unused',ffprobe='unused')
 
-    def test_each_compression_has_a_new_name_even_without_an_existing_output(self):
+    def test_original_name_is_preserved_and_repeated_jobs_are_numbered(self):
+        self.source=self.source.rename(self.source.with_suffix('.mkv'))
         names=[];temporary_names=[]
         for _ in range(3):
             output=self.compress()
-            self.assertRegex(output.name,r'^película_comprimido_[0-9a-f]{12}\.mp4$')
             self.assertEqual(output.read_bytes(),PAYLOAD)
             names.append(output.name);temporary_names.append(Path(self.commands[-1][-1]).name)
-            output.unlink()
-        self.assertEqual(len(set(names)),3)
+        self.assertEqual(names,['película.mp4','película_1.mp4','película_2.mp4'])
         self.assertEqual(len(set(temporary_names)),3)
         self.assertEqual(self.source.read_bytes(),b'original video')
         self.assertEqual(list(self.root.glob('.mb-compress-*')),[])
 
-    def test_custom_name_is_a_base_and_repeated_jobs_do_not_reuse_it(self):
+    def test_free_original_name_can_be_reused_after_the_output_is_removed(self):
+        self.source=self.source.rename(self.source.with_suffix('.mkv'))
+        for _ in range(2):
+            output=self.compress()
+            self.assertEqual(output.name,'película.mp4')
+            output.unlink()
+
+    def test_original_mp4_name_is_reserved_and_never_overwritten(self):
+        self.assertEqual([self.compress().name for _ in range(2)],['película_1.mp4','película_2.mp4'])
+        self.assertEqual(self.source.read_bytes(),b'original video')
+
+    def test_custom_name_is_preserved_when_free(self):
+        output=self.compress(engine.CompressionOptions(mode='cpu',unlimited=True,output_name='mi vídeo.mp4'))
+        self.assertEqual(output.name,'mi vídeo.mp4')
+
+    def test_custom_name_collisions_are_numbered(self):
         existing=self.root/'mi vídeo.mp4';existing.write_bytes(b'keep custom output')
         options=engine.CompressionOptions(mode='cpu',unlimited=True,output_name=existing.name)
         outputs=[self.compress(options) for _ in range(2)]
-        self.assertNotEqual(outputs[0],outputs[1])
-        for output in outputs:self.assertRegex(output.name,r'^mi vídeo_[0-9a-f]{12}\.mp4$')
+        self.assertEqual([output.name for output in outputs],['mi vídeo_1.mp4','mi vídeo_2.mp4'])
         self.assertEqual(existing.read_bytes(),b'keep custom output')
 
-    def test_generated_name_collision_still_publishes_exclusively(self):
-        existing=self.root/f'película_comprimido_{NONCE}.mp4';existing.write_bytes(b'keep collision')
+    def test_temporary_nonce_is_not_added_to_the_final_name(self):
+        existing=self.root/f'película_comprimido_{NONCE}.mp4';existing.write_bytes(b'keep old output')
         with patch.object(engine.uuid,'uuid4') as random_id:
             random_id.return_value.hex=NONCE+'0'*20
             output=self.compress()
-        self.assertEqual(output.name,f'película_comprimido_{NONCE}_1.mp4')
-        self.assertEqual(existing.read_bytes(),b'keep collision')
+        self.assertEqual(output.name,'película_1.mp4')
+        self.assertEqual(Path(self.commands[-1][-1]).name,f'payload_{NONCE}.part')
+        self.assertEqual(existing.read_bytes(),b'keep old output')
         self.assertEqual(self.source.read_bytes(),b'original video')
 
-    def test_long_default_name_is_limited_and_explicit_long_base_is_rejected(self):
+    def test_long_names_are_preserved_and_invalid_names_are_rejected(self):
         self.source=self.root/('á'*200+'.mp4');self.source.write_bytes(b'original video')
         output=self.compress()
-        self.assertLessEqual(len(output.name.encode('utf-16-le'))//2,197)
-        self.assertTrue(output.name.endswith('.mp4'))
-        for name in ('x'*181+'.mp4','bad\x01name.mp4'):
+        self.assertEqual(output.name,'á'*200+'_1.mp4')
+        custom_name='b'*200+'.mp4'
+        output=self.compress(engine.CompressionOptions(mode='cpu',unlimited=True,output_name=custom_name))
+        self.assertEqual(output.name,custom_name)
+        for name in ('x'*252+'.mp4','bad\x01name.mp4'):
             with self.assertRaises(engine.EncodeError):
                 self.compress(engine.CompressionOptions(mode='cpu',unlimited=True,output_name=name))
+
+    def test_only_a_collision_suffix_truncates_a_maximum_length_name(self):
+        self.source=self.root/('x'*251+'.mkv');self.source.write_bytes(b'original video')
+        first=self.compress();second=self.compress()
+        self.assertEqual(first.name,'x'*251+'.mp4')
+        self.assertEqual(second.name,'x'*249+'_1.mp4')
+        self.assertEqual(first.read_bytes(),PAYLOAD)
+        self.assertEqual(self.source.read_bytes(),b'original video')
 
     def make_pending(self,run=None):
         control=engine.Control()
@@ -141,7 +165,7 @@ class UniqueNameChecks(unittest.TestCase):
         release=hold_without_delete_sharing(existing)
         try:
             output=self.compress(engine.CompressionOptions(mode='cpu',unlimited=True,output_name='custom.mp4'))
-            self.assertRegex(output.name,r'^custom_[0-9a-f]{12}\.mp4$')
+            self.assertEqual(output.name,'custom_1.mp4')
             self.assertEqual(existing.read_bytes(),b'old output in use')
         finally:release()
 
@@ -158,7 +182,8 @@ class UniqueNameChecks(unittest.TestCase):
             pending=failure.exception
             self.assertRegex(pending.recovery_path.name,r'^payload_[0-9a-f]{12}\.part$')
             self.assertEqual(pending.recovery_path.read_bytes(),PAYLOAD)
-            self.assertFalse(pending.desired_target.exists())
+            self.assertEqual(pending.desired_target,self.source)
+            self.assertFalse((self.root/'película_1.mp4').exists())
             releases.pop()()
             output=engine.finalize_output(pending.recovery_path,pending.desired_target)
             self.assertEqual(output.read_bytes(),PAYLOAD)
@@ -183,7 +208,7 @@ class UniqueNameRealEncodeChecks(unittest.TestCase):
             subprocess.run([self.ffmpeg,'-v','error','-y','-f','lavfi','-i','testsrc2=size=160x120:rate=12',
                             '-t','0.5','-c:v','libx264',str(source)],check=True,**engine._flags())
             original=source.read_bytes()
-            for mode in modes:
+            for index,mode in enumerate(modes):
                 calls=[];real_run=engine._run
                 def capture(cmd,*args):
                     calls.append(cmd)
@@ -194,7 +219,7 @@ class UniqueNameRealEncodeChecks(unittest.TestCase):
                 with patch.object(engine,'_run',side_effect=capture):
                     output=engine.compress(source,root,engine.CompressionOptions(mode=mode,unlimited=True),
                                            ffmpeg=self.ffmpeg,ffprobe=self.ffprobe)
-                self.assertRegex(output.name,r'^película fuente_comprimido_[0-9a-f]{12}\.mp4$')
+                self.assertEqual(output.name,'película fuente'+(f'_{index}' if index else '')+'.mp4')
                 self.assertEqual(engine.probe(output,self.ffprobe)['width'],160)
                 self.assertTrue(calls)
             self.assertEqual(source.read_bytes(),original)

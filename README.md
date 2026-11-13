@@ -2,11 +2,11 @@
 
 <p align="center"><img src="assets/mb-logo-02.png" width="180" alt="MB Compresor de Video IA"></p>
 
-Compresor de escritorio para Windows de 64 bits. Exporta videos locales a MP4 de alta calidad con control de tamaño máximo. Versión **1.0.44**.
+Compresor de escritorio para Windows de 64 bits. Exporta videos locales a MP4 de alta calidad con control de tamaño máximo. Versión **1.0.45**.
 
 ## Descargar
 
-En [Releases](https://github.com/floresroldanluis/MBCompresorVideoIA/releases/latest), descarga **MBCompresorVideoIA-Setup-v1.0.44-windows-x64.exe** y sigue el asistente. Incluye FFmpeg y FFprobe; no requiere Python. Para usar la versión portátil, extrae toda la carpeta del ZIP antes de abrir `MB Compresor Pro.exe`.
+En [Releases](https://github.com/floresroldanluis/MBCompresorVideoIA/releases/latest), descarga **MBCompresorVideoIA-Setup-v1.0.45-windows-x64.exe** y sigue el asistente. Incluye FFmpeg y FFprobe; no requiere Python. Para usar la versión portátil, extrae toda la carpeta del ZIP antes de abrir `MB Compresor Pro.exe`.
 
 ## Funciones
 
@@ -40,7 +40,7 @@ FFmpeg/FFprobe pueden estar en PATH o en `tools/`. Configuración también permi
 
 Para compilar, coloca `ffmpeg.exe` y `ffprobe.exe` en `tools/` (puedes obtenerlos del ZIP publicado) y ejecuta `Construir.ps1`. Con [Inno Setup 6](https://jrsoftware.org/isinfo.php) instalado, `Construir-Instalador.ps1` genera el instalador.
 
-`Preparar-Release.ps1 -ReleaseVersion 1.0.41` genera el ZIP del actualizador y `SHA256SUMS`. La etiqueta del Release, el paquete y `app.py` deben usar la misma versión.
+`Preparar-Release.ps1 -ReleaseVersion 1.0.45` genera el ZIP del actualizador y `SHA256SUMS`. La etiqueta del Release, el paquete y `app.py` deben usar la misma versión.
 
 ## Pruebas
 
@@ -80,8 +80,8 @@ Actualizar motores comprueba FFmpeg, FFprobe y NVIDIA compatible, informa cuando
 
 Pruebas:96 aprobadas y1omitida por permisos de symlink. Incluyen bloqueos Windows reales, publicación concurrente, recuperación sin recodificar, Full HD y límites de tamaño.
 
-## Nombres únicos 1.0.44
+## Nombres de salida 1.0.45
 
-Cada compresión genera un nombre final nuevo, también con nombres base personalizados. El temporal usa un identificador aleatorio y extensión .part, con contenedorMP4 explícito. Los archivos existentes y los originales no se sustituyen.
+El MP4 final conserva el nombre original: `Video.mkv` → `Video.mp4`. Si ya existe, se usan `Video_1.mp4`, `Video_2.mp4`, etc. Los nombres personalizados siguen la misma regla. El original y los archivos existentes nunca se sobrescriben, incluso al guardar simultáneamente.
 
-Si Windows mantiene el bloqueo, siguen disponibles los reintentos y la recuperación de1.0.43. Un diagnóstico local de Restart Manager intenta mostrar qué aplicaciones usan los archivos. Es una consulta: no se cierran programas ni servicios, y algunos bloqueos no se pueden atribuir con esa API.
+Los identificadores aleatorios se usan únicamente en temporales `.part`, con contenedor MP4 explícito. Se conservan los reintentos ante bloqueos y la recuperación sin volver a comprimir. Restart Manager intenta identificar qué aplicaciones usan el archivo mediante una consulta local; no se fuerzan cierres de programas ni servicios.

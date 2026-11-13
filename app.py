@@ -23,7 +23,7 @@ import engine
 from acceleration import MODES
 from local_ai import OllamaClient
 
-VERSION = '1.0.44'
+VERSION = '1.0.45'
 DATA = (Path(os.environ.get('USERPROFILE',str(Path.home())))/'AppData'/'Local' if os.name=='nt' else Path(os.environ.get('LOCALAPPDATA',str(Path.home()))))/'MBCompresorPro'
 CONFIG = DATA / 'settings.json'
 
@@ -133,20 +133,20 @@ class ItemOptions(QWidget):
         self.start=QDoubleSpinBox(); self.start.setRange(0,item.info['duration']); self.start.setValue(item.options.trim_start); self.start.setSuffix(' s')
         self.end=QDoubleSpinBox(); self.end.setRange(0,item.info['duration']); self.end.setValue(item.options.trim_end or 0); self.end.setSuffix(' s'); self.end.setSpecialValueText('Hasta el final')
         self.out=QLineEdit(item.output_dir); row=QHBoxLayout(); row.addWidget(self.out); row.addWidget(button('Elegir…',self.choose))
-        self.filename=QLineEdit(getattr(item.options,'output_name',None) or (Path(item.path).stem+'.mp4'));self.filename.setToolTip('Nombre base: cada compresión añade un identificador único al MP4 para evitar reutilizar nombres anteriores.')
+        self.filename=QLineEdit(getattr(item.options,'output_name',None) or (Path(item.path).stem+'.mp4'));self.filename.setToolTip('Se usa este nombre. Si ya existe, se añade _1, _2, etc. El video original no se reemplaza.')
         self.adaptive=QCheckBox('Ajustar resolución al bitrate disponible'); self.adaptive.setChecked(item.options.local_ai)
         self.stereo=QCheckBox('Convertir audio a estéreo');self.stereo.setChecked(getattr(item.options,'downmix_audio',False))
         self.fps=combo([('Original',None),('24',24),('25',25),('30',30),('50',50),('60',60)],getattr(item.options,'fps',None))
         for title,w,r,c in [('Resolución',self.height,0,0),('Pista de audio',self.audio,0,2),('Calidad de audio',self.kbps,1,0),('Subtítulos',self.sub,1,2)]:
             f.addWidget(label(title),r,c);f.addWidget(w,r,c+1)
         f.addWidget(label('Carpeta de salida'),2,0);f.addLayout(row,2,1,1,3)
-        f.addWidget(label('Nombre base MP4'),3,0);f.addWidget(self.filename,3,1,1,3)
+        f.addWidget(label('Nombre MP4'),3,0);f.addWidget(self.filename,3,1,1,3)
         self.unlimited=QCheckBox('Máximo por video sin límite');self.unlimited.setChecked(item.options.unlimited);f.addWidget(self.unlimited,5,0,1,4)
         self.mode=combo(MODES,item.options.mode);f.addWidget(label('Modo de compresión'),4,0);f.addWidget(self.mode,4,1,1,3)
         advanced=QWidget();af=QFormLayout(advanced);advanced.hide()
         for title,w in [('Modo de subtítulos',self.submode),('FPS',self.fps),('Inicio',self.start),('Final',self.end),('',self.stereo),('',self.adaptive)]:af.addRow(title,w)
         l.addWidget(button('Más opciones: recorte, FPS y procesamiento',lambda:advanced.setVisible(not advanced.isVisible())));l.addWidget(advanced)
-        note=label('Cada MP4 tendrá un identificador único. Los cambios se guardan automáticamente; el original se conserva.','muted');note.setWordWrap(True);l.addWidget(note)
+        note=label('Si el nombre ya existe, se añade numeración: _1, _2, etc. Los cambios se guardan automáticamente; el original se conserva.','muted');note.setWordWrap(True);l.addWidget(note)
         l.addWidget(button('Ocultar opciones',self.closed.emit),alignment=Qt.AlignRight)
         for field in (self.height,self.audio,self.kbps,self.sub,self.submode,self.fps,self.mode):field.currentIndexChanged.connect(self.apply)
         for field in (self.start,self.end,self.out,self.filename):field.editingFinished.connect(self.apply)

@@ -63,7 +63,11 @@ def finalize_output(result, desired_target, control=None, log=None, source=None)
     deadline=time.monotonic()+PUBLISH_RETRY_SECONDS
     waiting=False
     for index in range(10000):
-        target=desired_target.with_name(desired_target.stem+(f'_{index}' if index else '')+desired_target.suffix)
+        suffix=(f'_{index}' if index else '')+desired_target.suffix
+        # Preserve the original name unless the MP4 extension or collision suffix
+        # would exceed Windows' 255 UTF-16-unit filename component limit.
+        stem=desired_target.stem.encode('utf-16-le')[:(255-len(suffix))*2].decode('utf-16-le',errors='ignore')
+        target=desired_target.with_name(stem+suffix)
         if target==source:continue
         while True:
             if control.cancelled.is_set():
@@ -377,8 +381,8 @@ def compress(source, output_dir, options, control=None, progress=None, log=None,
             output_name.split('.')[0].upper() in {'CON','PRN','AUX','NUL',*[f'COM{i}' for i in range(1,10)],*[f'LPT{i}' for i in range(1,10)]}):
             raise EncodeError('El nombre de salida debe ser un nombre de archivo MP4 válido, sin carpetas.')
         if not output_name[:-4].strip('. '): raise EncodeError('El nombre de salida no puede estar vacío.')
-        if len(output_name[:-4].encode('utf-16-le'))>360:
-            raise EncodeError('El nombre base de salida es demasiado largo; usa hasta 180 caracteres.')
+        if len(output_name.encode('utf-16-le'))>510:
+            raise EncodeError('El nombre de salida es demasiado largo; usa hasta 255 caracteres con la extensión.')
     start=float(options.trim_start); end=float(options.trim_end) if options.trim_end is not None else info['duration']
     if not 0<=start<end<=info['duration']+.01: raise EncodeError('Intervalo de recorte no válido.')
     duration=end-start
@@ -431,12 +435,8 @@ def compress(source, output_dir, options, control=None, progress=None, log=None,
     preset={'rapido':'veryfast','equilibrado':'medium','calidad':'slow'}.get(options.speed,options.speed)
     if options.mode=='cpu':preset='slow'
     if preset not in ('ultrafast','superfast','veryfast','faster','fast','medium','slow','slower','veryslow'): raise EncodeError('Velocidad no válida.')
-    if output_name is not None:
-        stem=Path(output_name).stem
-    else:
-        # Leave room for the suffix on Windows, including names with surrogate pairs.
-        stem=source.stem.encode('utf-16-le')[:336].decode('utf-16-le',errors='ignore').rstrip('. ')+'_comprimido'
-    desired_target=out/(stem+'_'+uuid.uuid4().hex[:12]+'.mp4')
+    stem=Path(output_name).stem if output_name is not None else source.stem
+    desired_target=out/(stem+'.mp4')
     temp=Path(tempfile.mkdtemp(prefix='.mb-compress-',dir=out))
     preserve_result=False
     try:

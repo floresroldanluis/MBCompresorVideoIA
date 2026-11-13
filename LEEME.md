@@ -1,4 +1,4 @@
-# MB Compresor de Video IA · versión 1.0.44
+# MB Compresor de Video IA · versión 1.0.45
 
 Compresor de video de escritorio para Windows. Su función es transformar videos locales a MP4 de alta calidad, con un tamaño máximo por archivo.
 
@@ -57,7 +57,7 @@ En 1.0.5, el título MB Compresor de Video IA y el subtítulo están centrados. 
 Para publicar futuras actualizaciones, compila la versión con Construir.ps1 y genera sus archivos con Preparar-Release.ps1 -ReleaseVersion 1.0.6 (cambia la versión cuando corresponda). En el repositorio crea un Release estable con etiqueta v1.0.6 y adjunta el ZIP generado y SHA256SUMS. No subas solo el ejecutable: necesita la carpeta _internal y los motores. El actualizador espera el paquete ZIP de Windows de esta aplicación; un instalador de otro programa no se ejecuta automáticamente. El ZIP y la etiqueta deben corresponder a la versión de app.py. La instalación conserva respaldos en AppData\\Local\\MBCompresorPro\\updates y registra el resultado en last-result.json.
 
 
-La versión 1.0.44 incorpora una transición de aparición al abrir (260 ms) y desvanecimiento al cerrar (220 ms), sin bloquear la interfaz. La cola se guarda antes de cerrar. Si hay una compresión o consulta de IA en curso, el cierre sigue protegido. La instalación de actualizaciones utiliza también este cierre animado antes de reiniciar.
+La versión 1.0.45 incorpora una transición de aparición al abrir (260 ms) y desvanecimiento al cerrar (220 ms), sin bloquear la interfaz. La cola se guarda antes de cerrar. Si hay una compresión o consulta de IA en curso, el cierre sigue protegido. La instalación de actualizaciones utiliza también este cierre animado antes de reiniciar.
 
 
 ## Modos de compresión
@@ -70,11 +70,11 @@ Se incluye FFmpeg 8.0.1 separado para compatibilidad NVENC, además del motor pr
 
 Activa la casilla junto al máximo con límite para comprimir por calidad visual alta, sin objetivo de GB (CPU CRF 18 o NVIDIA CQ 18). El campo GB queda deshabilitado. Se conserva el audio compatible con MP4 sin recodificar; otros formatos se convierten a ALAC sin pérdida adicional. Si eliges estéreo, se respeta esa conversión. La resolución y FPS seleccionados siguen aplicándose. El video se recodifica con pérdida: no se garantiza identidad con el original ni un archivo más pequeño. La pausa automática por espacio y la cancelación siguen funcionando.
 
-## Optimización 1.0.44
+## Optimización 1.0.45
 
 Revisión con Astra del control de bitrate de NVIDIA para reducir recodificaciones por tamaño. CPU reutiliza su análisis cuando ajusta la salida. Se mantienen alta calidad, límite estricto en GB, pausa por espacio y procesamiento local. La mejora de tiempo depende del contenido y del número de reintentos evitados; no se garantiza una reducción universal del tiempo o del tamaño.
 
-## Guardado seguro y Full HD (1.0.44)
+## Guardado seguro y Full HD (1.0.45)
 
 El MP4 final se publica de forma atómica sin crear un archivo vacío antes. Si Windows mantiene un bloqueo temporal, se espera y reintenta hasta 20 segundos. Si persiste, el MP4 ya convertido se conserva, el registro indica su ruta y la fila muestra Guardado pendiente. Reintentar guardado mueve el resultado sin volver a comprimir; Abrir recuperación abre su carpeta. Al reiniciar, Recuperar guardados pendientes permite recuperar esas filas sin llenar automáticamente la cola.
 
@@ -82,9 +82,9 @@ Full HD usa un máximo de1920×1080, mantiene la proporción y no amplía fuente
 
 El mantenimiento revisa FFmpeg, FFprobe y NVIDIA compatible. yt-dlp y Deno no intervienen en la compresión local y no se instalan como requisito. La compatibilidad de NVIDIA se comprueba con una codificación real; un componente compatible no se reemplaza ciegamente por una versión que requiera otro controlador. Si no hay conexión, se informa que no pudo verificarse la actualización.
 
-## Nombres únicos de guardado (1.0.44)
+## Nombres de salida (1.0.45)
 
-Cada compresión genera un MP4 con identificador nuevo. Ejemplo: Video_comprimido_a1b2c3d4e5f6.mp4. Si se escribe un nombre base, también se añade un identificador. El video original no se sustituye.
+El MP4 final conserva el nombre del original: Video.mkv → Video.mp4. Si ya existe, se usan Video_1.mp4, Video_2.mp4, etc. Un nombre personalizado se respeta con la misma regla. El original y las salidas existentes nunca se sobrescriben. Los identificadores aleatorios se usan únicamente en los temporales .part.
 
 El temporal usa un nombre aleatorio con extensión .part y contenedor MP4 explícito; no aparece como un MP4 terminado durante la codificación. Esto reduce colisiones y la exposición a previsualizadores, pero no garantiza que ningún servicio lo examine. Se mantienen los reintentos y la recuperación sin recodificar de 1.0.43.
 
