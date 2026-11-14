@@ -1,4 +1,4 @@
-# MB Compresor de Video IA · versión 1.0.45
+# MB Compresor de Video IA · versión 1.0.46
 
 Compresor de video de escritorio para Windows. Su función es transformar videos locales a MP4 de alta calidad, con un tamaño máximo por archivo.
 
@@ -89,3 +89,17 @@ El MP4 final conserva el nombre del original: Video.mkv → Video.mp4. Si ya exi
 El temporal usa un nombre aleatorio con extensión .part y contenedor MP4 explícito; no aparece como un MP4 terminado durante la codificación. Esto reduce colisiones y la exposición a previsualizadores, pero no garantiza que ningún servicio lo examine. Se mantienen los reintentos y la recuperación sin recodificar de 1.0.43.
 
 Si el bloqueo persiste, se intenta consultar qué aplicaciones están usando el archivo mediante Restart Manager de Windows. El diagnóstico puede no identificar procesos protegidos, servicios o controladores. No se fuerzan cierres de otras aplicaciones ni se desactiva protección del sistema.
+
+## Calidad por tamaño (1.0.46)
+
+El perfil inicial prioriza H.265/HEVC, Full HD y Máxima calidad. Se aplica una sola vez al actualizar; después se respetan las elecciones del usuario, incluido H.264 para compatibilidad. Full HD mantiene un máximo de 1920×1080, proporción y FPS, sin ampliar videos pequeños. La resolución no garantiza nitidez si el tamaño solicitado deja pocos bits para una película larga.
+
+El presupuesto inicial reserva menos espacio sin usar. En NVIDIA, si el MP4 queda claramente por debajo del límite y hay margen útil para mejorar la imagen, se permite refinar la codificación desde el original con un bitrate medido mayor. Se conserva un candidato válido durante el refino, se verifican los bytes finales y nunca se publica un archivo que supere el máximo. Esto puede requerir tiempo adicional. No se rellenan archivos para simular calidad o tamaño.
+
+H.264 NVIDIA usa el perfil High explícito. Los identificadores aleatorios siguen limitados a temporales; las salidas conservan el nombre original y numeran colisiones. El original no se reemplaza. Para mejorar un MP4 ya comprimido, vuelve a agregar el video original.
+
+1 GB de la aplicación son 1 000 000 000 bytes. El Explorador de Windows calcula GiB aunque muestre GB: 1.95 GB de la aplicación equivalen aproximadamente a 1.82 en el Explorador. No se debe confundir esta diferencia de unidades con pérdida de calidad.
+
+Las mediciones y sus límites se describen en [CALIDAD_VIDEO.md](https://github.com/floresroldanluis/MBCompresorVideoIA/blob/main/CALIDAD_VIDEO.md). El límite de tamaño continúa siendo estricto; para conservar aún más detalle en videos largos puede ser necesario aumentarlo o seleccionar el modo sin límite.
+
+En HEVC con límite se conserva AAC, AC-3 o E-AC-3 compatible con MP4 cuando el bitrate es conocido, cabe en el presupuesto y no se recorta ni convierte a estéreo. Evita una pérdida adicional de audio y deja más espacio para la imagen. HEVC con audio Dolby requiere un reproductor compatible. H.264 con límite conserva AAC como formato de audio compatible.

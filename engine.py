@@ -277,31 +277,59 @@ def cleanup_recovery_workspace(result_path, log=None):
         return False
 
 
-def _retry_video_bitrate(result, bitrate, cap, duration, audio_bitrate, ffprobe):
-    """Reduce video only: audio, subtitles and container bytes do not shrink with it."""
+SIZE_BUDGET_FRACTION=.985
+SIZE_RETRY_FRACTION=.98
+NVENC_REFINE_THRESHOLD=.94
+
+
+def _measured_output_budget(result, duration, audio_bitrate, ffprobe):
+    """Return total/fixed bytes and whether the video allocation was measured."""
     actual=Path(result).stat().st_size
     fixed=min(audio_bitrate*duration/8, actual*.75)
+    measured=False
     try:
         video=probe(result,ffprobe)['video']
         video_bytes=float(video['bit_rate'])*float(video['duration'])/8
         if math.isfinite(video_bytes) and 0<video_bytes<=actual:
             fixed=actual-video_bytes
+            measured=True
     except (EncodeError,OSError,ValueError,KeyError,TypeError):
         # Some muxers omit stream bit_rate. The selected audio budget is a
         # conservative fallback; every subsequent result is still byte-checked.
         pass
-    available=cap*.95-fixed
+    return actual,fixed,measured
+
+
+def _retry_video_bitrate(result, bitrate, cap, duration, audio_bitrate, ffprobe):
+    """Reduce video only: audio, subtitles and container bytes do not shrink with it."""
+    actual,fixed,_=_measured_output_budget(result,duration,audio_bitrate,ffprobe)
+    available=cap*SIZE_RETRY_FRACTION-fixed
     if available<=0:
         raise EncodeError('El límite solicitado no permite conservar el audio y los subtítulos.')
-    return int(bitrate*min(.95,available/(actual-fixed)))
+    return int(bitrate*min(.98,available/(actual-fixed)))
+
+
+def _refine_video_bitrate(bitrate, cap, actual, fixed):
+    """Spend useful spare video budget, without padding an already small file."""
+    if actual>=cap*NVENC_REFINE_THRESHOLD:return None
+    video_bytes=actual-fixed
+    if video_bytes<=0:return None
+    ratio=(cap*SIZE_RETRY_FRACTION-fixed)/video_bytes
+    if ratio<1.08:return None
+    return int(bitrate*min(1.5,ratio))
 
 def _capped_audio_copy_rates(audio, options, audio_rate):
-    """Copy eligible AAC tracks only when their known bitrate fits the budget."""
+    """Copy compatible audio only when its known bitrate fits the budget.
+
+    H.264 keeps AAC for the broadly compatible profile. The HEVC profile also
+    preserves AC3/EAC3, whose playback already requires a compatible player.
+    """
     rates=[None]*len(audio)
     if options.downmix_audio or options.trim_start!=0 or options.trim_end is not None:
         return rates
+    compatible={'aac','ac3','eac3'} if options.codec=='h265' else {'aac'}
     for index,stream in enumerate(audio):
-        if stream.get('codec_name')!='aac':continue
+        if stream.get('codec_name') not in compatible:continue
         try:rate=int(stream.get('bit_rate',0))
         except (TypeError,ValueError,OverflowError):continue
         if 0<rate<=audio_rate:rates[index]=rate
@@ -399,13 +427,16 @@ def compress(source, output_dir, options, control=None, progress=None, log=None,
     audio_rate=min(max(32,int(options.audio_kbps)),512)*1000
     bitrate=0;audio_copy_rates=[None]*len(audio);audio_budget=audio_rate*len(audio)
     if not options.unlimited:
-        budget=cap*8/duration*.95
+        # Reserve 1.5% for muxing/rate-control variation. Results are still
+        # checked against the exact byte cap; measured retries target 98%.
+        budget=cap*8/duration*SIZE_BUDGET_FRACTION
         if audio: audio_rate=min(audio_rate,int(budget*.25/len(audio)))
         if audio and audio_rate<24000: raise EncodeError('El límite es demasiado pequeño para conservar las pistas de audio.')
         audio_copy_rates=_capped_audio_copy_rates(audio,options,audio_rate)
         audio_budget=sum(rate if rate is not None else audio_rate for rate in audio_copy_rates)
         bitrate=int(budget-audio_budget)
         if bitrate<20000: raise EncodeError('El límite de tamaño es demasiado pequeño para este video.')
+        log(f'Presupuesto de salida: máximo {cap/1e9:.3f} GB; video {bitrate//1000} kb/s, audio hasta {audio_budget//1000} kb/s. Se verifica el tamaño final en bytes.')
     else:
         log('Sin límite de tamaño: calidad visual alta (CRF/CQ 18), sin reducir bitrate para alcanzar GB. El tamaño final depende del contenido.')
     height=min(info['height'],options.height or info['height']); width=info['width']
@@ -442,11 +473,21 @@ def compress(source, output_dir, options, control=None, progress=None, log=None,
     try:
         # A .part file avoids advertising an unfinished video to thumbnail handlers.
         # Its muxer is specified explicitly rather than inferred from the extension.
-        result=temp/('payload_'+uuid.uuid4().hex[:12]+'.part'); stats=temp/'pass'
+        result=None;stats=temp/'pass';created_results=[];best=None
+        def discard_other_results(keep):
+            # Keep at most the verified candidate and the active attempt. Never
+            # discover files by glob: unrelated recovery files are not ours.
+            for candidate in created_results:
+                if candidate!=keep:
+                    try:candidate.unlink(missing_ok=True)
+                    except OSError as exc:log(f'No se pudo retirar el temporal adicional: {candidate} ({exc})')
         _hide_work_directory(temp,log)
         space_guard=DiskSpaceGuard(out,log)
         analysis_ready=False
         for attempt in range(4):
+            # Retain the last verified candidate while a refinement is encoded.
+            # Every attempt reads the original and writes a separate .part.
+            result=temp/('payload_'+uuid.uuid4().hex[:12]+'.part');created_results.append(result)
             gpu=backend=='nvidia'
             passes=(1,) if gpu or options.unlimited else (2,) if analysis_ready else (1,2)
             total_passes=len(passes)
@@ -466,6 +507,7 @@ def compress(source, output_dir, options, control=None, progress=None, log=None,
                     if gpu:
                         gpu_preset={'rapido':'p4','equilibrado':'p5','calidad':'p6'}.get(options.speed,'p5')
                         cmd+=['-c:v',codec,'-preset',gpu_preset,'-tune','hq','-rc','vbr','-b:v','0' if options.unlimited else str(bitrate)]
+                        if options.codec=='h264':cmd+=['-profile:v','high']
                         # CQ overrides the average bitrate target in NVENC VBR.
                         # Use it only when file size is unrestricted; otherwise
                         # spend the available bitrate without quality-target overshoot.
@@ -487,7 +529,7 @@ def compress(source, output_dir, options, control=None, progress=None, log=None,
                             for index,rate in enumerate(audio_copy_rates):
                                 if rate is not None:
                                     cmd+=['-c:a:'+str(index),'copy']
-                                    log('Audio '+str(audio[index]['index'])+': AAC original sin recodificar; bitrate reservado según la pista.')
+                                    log('Audio '+str(audio[index]['index'])+': '+audio[index]['codec_name'].upper()+' original sin recodificar; bitrate reservado según la pista.')
                         if options.unlimited and not options.downmix_audio:
                             for index,stream in enumerate(audio):
                                 if stream.get('codec_name') in ('aac','ac3','eac3','alac','mp3'):
@@ -501,20 +543,72 @@ def compress(source, output_dir, options, control=None, progress=None, log=None,
                     cmd[1:1]=['-progress','pipe:1','-stats_period','0.3']
                     _run(cmd,control,duration,progress,progress_pass,log,space_guard,total_passes,backend)
                     if first_analysis:analysis_ready=True
-            except EncodeCancelled:raise
-            except EncodeError as exc:
+            except EncodeCancelled as exc:
+                if best is not None:
+                    result=best['path'];preserve_result=True
+                    raise OutputPublishCancelled('Refinamiento cancelado. Se conserva el MP4 completo anterior; puedes guardarlo sin volver a comprimir.',result,desired_target) from exc
+                raise
+            except (EncodeError,OSError) as exc:
+                if best is not None:
+                    log('No se pudo completar el refinamiento; se conserva el mejor MP4 válido dentro del límite. '+str(exc)[-300:])
+                    result=best['path'];actual=best['actual'];preserve_result=True
+                    break
                 if gpu and options.mode=='auto':
                     log('Automático: falló NVIDIA; se reintentará con CPU. '+str(exc)[-500:])
                     backend='cpu';ffmpeg=primary_ffmpeg;continue
                 raise
-            actual=result.stat().st_size
-            if actual<=0:raise EncodeError('FFmpeg no produjo un MP4 válido; el archivo está vacío.')
-            if options.unlimited or actual<=cap:
+            try:
+                actual=result.stat().st_size
+                if actual<=0:raise EncodeError('FFmpeg no produjo un MP4 válido; el archivo está vacío.')
+            except (EncodeError,OSError):
+                if best is None:raise
+                log('El refinamiento no produjo una salida válida; se conserva el MP4 completo anterior.')
+                result=best['path'];actual=best['actual'];preserve_result=True
+                break
+            if options.unlimited or not gpu and actual<=cap:
                 preserve_result=True
                 break
-            bitrate=_retry_video_bitrate(result,bitrate,cap,duration,audio_budget,ffprobe)
+            if actual<=cap:
+                try:
+                    _,fixed,measured=_measured_output_budget(result,duration,audio_budget,ffprobe)
+                except OSError:
+                    fixed=min(audio_budget*duration/8,actual*.75);measured=False
+                previous=best
+                if previous is not None and not measured:
+                    log('No se pudo medir la mejora del refinamiento; se conserva el MP4 válido anterior.')
+                    result=best['path'];actual=best['actual'];preserve_result=True
+                    break
+                video_bytes=actual-fixed
+                if best is None or video_bytes>best['video_bytes']:
+                    best=dict(path=result,actual=actual,video_bytes=video_bytes)
+                # Optional refinement requires reliable video measurements and
+                # useful measured progress, rather than simply filling bytes.
+                next_bitrate=(_refine_video_bitrate(bitrate,cap,actual,fixed)
+                              if measured and (previous is None or video_bytes>previous['video_bytes']*1.01) else None)
+                if next_bitrate is None or attempt==3:
+                    result=best['path'];actual=best['actual'];preserve_result=True
+                    break
+                log(f'Salida válida de {actual/1e9:.3f} GB ({actual/cap:.1%} del máximo). Se refina desde el original para aprovechar más bitrate de video: {bitrate//1000} → {next_bitrate//1000} kb/s; el MP4 anterior se conserva.')
+                discard_other_results(best['path'])
+                bitrate=next_bitrate
+                continue
+            if attempt==3 and best is not None:
+                log('Se conserva el mejor MP4 válido: el último refinamiento excedió el límite.')
+                result=best['path'];actual=best['actual'];preserve_result=True
+                break
+            try:
+                bitrate=_retry_video_bitrate(result,bitrate,cap,duration,audio_budget,ffprobe)
+            except (EncodeError,OSError):
+                if best is None:raise
+                result=best['path'];actual=best['actual'];preserve_result=True
+                break
             log('Se ajustará el bitrate de video para cumplir el tamaño máximo, conservando las pistas seleccionadas.')
-            if bitrate<10000: raise EncodeError('El límite solicitado no permite una salida válida.')
+            if bitrate<10000:
+                if best is None:raise EncodeError('El límite solicitado no permite una salida válida.')
+                log('El ajuste no deja bitrate útil; se conserva el mejor MP4 válido anterior.')
+                result=best['path'];actual=best['actual'];preserve_result=True
+                break
+            discard_other_results(best['path'] if best is not None else None)
         else: raise EncodeError('No se alcanzó el tamaño máximo; no se publicó ningún archivo.')
         target=finalize_output(result,desired_target,control,log,source)
         preserve_result=False
@@ -523,6 +617,9 @@ def compress(source, output_dir, options, control=None, progress=None, log=None,
         return target
     finally:
         if preserve_result:
+            # Delete only extra results created by this call. Unknown files in
+            # a recovery directory are not ours to delete.
+            discard_other_results(result)
             _reveal_recovery_directory(temp,desired_target,log,result)
         else:
             # A scanner may briefly retain analysis files too. Cleanup must not

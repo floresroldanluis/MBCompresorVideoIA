@@ -15,18 +15,18 @@ class RateBudgetChecks(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             result=Path(folder)/'result.mp4'
             result.write_bytes(b'0'*120_000)
-            # 40 kB video, 80 kB fixed: a 100 kB cap leaves 15 kB for video
+            # 40 kB video, 80 kB fixed: a 100 kB cap leaves 18 kB for video
             # with the retry safety margin. Scaling the whole file is wrong.
             with patch('engine.probe',return_value={'video':{'bit_rate':'320000','duration':'1'}}):
                 value=engine._retry_video_bitrate(result,320000,100000,1,0,None)
-            self.assertEqual(value,120000)
+            self.assertEqual(value,144000)
 
     def test_missing_video_bitrate_uses_audio_budget(self):
         with tempfile.TemporaryDirectory() as folder:
             result=Path(folder)/'result.mp4';result.write_bytes(b'0'*120_000)
             with patch('engine.probe',return_value={'video':{}}):
                 value=engine._retry_video_bitrate(result,640000,100000,1,320000,None)
-            self.assertEqual(value,440000)
+            self.assertEqual(value,464000)
 
     def test_fixed_tracks_cannot_fit_fails_without_another_encode(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -66,8 +66,9 @@ class EncodingPlanChecks(unittest.TestCase):
             calls,_,_=self.capture_plan('nvidia',False,codec)
             cmd=calls[0][0]
             self.assertNotIn('-cq',cmd)
-            self.assertEqual(cmd[cmd.index('-b:v')+1],'760000')
+            self.assertEqual(cmd[cmd.index('-b:v')+1],'788000')
             self.assertEqual(cmd[cmd.index('-preset')+1],'p6')
+            if codec=='h264':self.assertEqual(cmd[cmd.index('-profile:v')+1],'high')
             calls,_,_=self.capture_plan('nvidia',True,codec)
             cmd=calls[0][0]
             self.assertEqual(cmd[cmd.index('-cq')+1],'18')
@@ -130,6 +131,31 @@ class CappedAudioCopyChecks(unittest.TestCase):
         tracks += [{'codec_name':'ac3','bit_rate':'64000'},{'codec_name':'opus','bit_rate':'64000'}]
         self.assertEqual(engine._capped_audio_copy_rates(tracks,options,190000),[64000,190000]+[None]*9)
 
+    def test_ac3_and_eac3_copy_requires_hevc_and_a_known_bitrate_within_budget(self):
+        tracks=[{'codec_name':codec,'bit_rate':rate} for codec in ('ac3','eac3') for rate in ('256000','340001',None,'N/A','0')]
+        for codec in ('h264','h265'):
+            rates=engine._capped_audio_copy_rates(tracks,engine.CompressionOptions(codec=codec),340000)
+            self.assertEqual(rates,([None]*10 if codec=='h264' else [256000]+[None]*4+[256000]+[None]*4))
+        for options in (engine.CompressionOptions(codec='h265',trim_start=.1),engine.CompressionOptions(codec='h265',trim_end=3),engine.CompressionOptions(codec='h265',downmix_audio=True)):
+            self.assertEqual(engine._capped_audio_copy_rates(tracks,options,340000),[None]*10)
+
+    def test_hevc_eac3_copy_releases_spare_audio_budget_to_three_hour_video(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder);source=root/'original.mkv';source.write_bytes(b'original')
+            info=dict(duration=11304.704,height=1080,width=1920,video={'index':0},audio=[{'index':1,'codec_name':'eac3','bit_rate':'256000','channels':6}],subtitles=[])
+            commands={}
+            def run(cmd,*args):
+                if Path(cmd[-1]).suffix=='.part':Path(cmd[-1]).write_bytes(b'valid video')
+            with patch('engine.probe',return_value=info),patch('engine._run',side_effect=run) as encode:
+                for codec in ('h264','h265'):
+                    encode.reset_mock()
+                    engine.compress(source,root,engine.CompressionOptions(mode='cpu',codec=codec,max_gb=1.95),ffmpeg='ffmpeg')
+                    commands[codec]=encode.call_args.args[0]
+            get_video=lambda cmd:int(cmd[cmd.index('-b:v')+1])
+            self.assertGreater(get_video(commands['h265'])-get_video(commands['h264']),80000)
+            self.assertEqual(commands['h265'][commands['h265'].index('-c:a:0')+1],'copy')
+            self.assertNotIn('-c:a:0',commands['h264'])
+
     def test_trim_and_downmix_always_encode_audio(self):
         track=[{'codec_name':'aac','bit_rate':'64000'}]
         for options in (engine.CompressionOptions(trim_start=.1),engine.CompressionOptions(trim_end=3),engine.CompressionOptions(downmix_audio=True)):
@@ -145,14 +171,14 @@ class CappedAudioCopyChecks(unittest.TestCase):
                 if Path(cmd[-1]).suffix=='.part':Path(cmd[-1]).write_bytes(b'0'*80000)
             with patch('engine.probe',return_value=info),patch('engine._run',side_effect=run):
                 engine.compress(source,root,engine.CompressionOptions(mode='cpu',max_gb=.0001),ffmpeg='ffmpeg')
-            # 760 kb/s total; 95 kb/s budget per audio track. Only the64kb/s
-            # AAC fits. The200kb/s track keeps its95kb/s AAC encode budget.
-            for cmd in calls:self.assertEqual(cmd[cmd.index('-b:v')+1],'601000')
+            # 788 kb/s total; 98.5 kb/s budget per audio track. Only the 64 kb/s
+            # AAC fits. The 200 kb/s track keeps its 98.5 kb/s AAC encode budget.
+            for cmd in calls:self.assertEqual(cmd[cmd.index('-b:v')+1],'625500')
             final=calls[-1]
             self.assertEqual(final[final.index('-c:a:0')+1],'copy')
             self.assertNotIn('-c:a:1',final)
             self.assertEqual(final[final.index('-c:a')+1],'aac')
-            self.assertEqual(final[final.index('-b:a')+1],'95000')
+            self.assertEqual(final[final.index('-b:a')+1],'98500')
 
     def test_real_capped_aac_copy_is_bit_exact_cpu_and_nvidia(self):
         ffmpeg,ffprobe=engine.discover_tools()
@@ -178,6 +204,30 @@ class CappedAudioCopyChecks(unittest.TestCase):
                 cmd=calls[-1]
                 self.assertEqual(cmd[cmd.index('-c:a:0')+1],'copy')
                 self.assertGreater(engine.probe(output,ffprobe)['duration'],2.9)
+
+    def test_real_hevc_ac3_and_eac3_copy_is_bit_exact_51_cpu_and_nvidia(self):
+        ffmpeg,ffprobe=engine.discover_tools()
+        if not ffmpeg or not ffprobe:self.skipTest('FFmpeg required')
+        modes=['cpu']
+        if acceleration.find_nvenc(ffmpeg,'h265')['available']:modes.append('nvidia')
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder)
+            for audio_codec in ('ac3','eac3'):
+                source=root/(audio_codec+'.mkv')
+                subprocess.run([ffmpeg,'-v','error','-y','-f','lavfi','-i','testsrc2=size=320x240:rate=24','-f','lavfi','-i','anullsrc=r=48000:cl=5.1','-t','3','-c:v','libx264','-c:a',audio_codec,'-b:a','256k',str(source)],check=True,**engine._flags())
+                original=source.read_bytes()
+                def audio_hash(path):
+                    return hashlib.sha256(subprocess.check_output([ffmpeg,'-v','error','-i',str(path),'-map','0:a:0','-c:a','copy','-f',audio_codec,'-'],**engine._flags())).digest()
+                expected=audio_hash(source)
+                for mode in modes:
+                    output=engine.compress(source,root,engine.CompressionOptions(mode=mode,codec='h265',max_gb=.0004),ffmpeg=ffmpeg,ffprobe=ffprobe)
+                    self.assertLessEqual(output.stat().st_size,400000)
+                    self.assertEqual(audio_hash(output),expected)
+                    audio=engine.probe(output,ffprobe)['audio'][0]
+                    self.assertEqual(audio['codec_name'],audio_codec)
+                    self.assertEqual(audio['channels'],6)
+                    subprocess.run([ffmpeg,'-v','error','-i',str(output),'-f','null','-'],check=True,**engine._flags())
+                self.assertEqual(source.read_bytes(),original)
 
 
 if __name__=='__main__':unittest.main()

@@ -23,14 +23,14 @@ import engine
 from acceleration import MODES
 from local_ai import OllamaClient
 
-VERSION = '1.0.45'
+VERSION = '1.0.46'
 DATA = (Path(os.environ.get('USERPROFILE',str(Path.home())))/'AppData'/'Local' if os.name=='nt' else Path(os.environ.get('LOCALAPPDATA',str(Path.home()))))/'MBCompresorPro'
 CONFIG = DATA / 'settings.json'
 
 def load_settings():
     defaults = dict(theme='Automático', output_folder='', compression_only=True,
         ollama_url='http://127.0.0.1:11434', ollama_model='qwen3:0.6b', max_gb=1.95,unlimited=False,
-        codec='h264', speed='calidad', height=1080, audio_kbps=512,mode='auto',
+        codec='h265', speed='calidad', height=1080, audio_kbps=512,mode='auto',
         ffmpeg='', ffprobe='', cookies_browser='', cookies_file='', update_url='')
     try:
         value = json.loads(CONFIG.read_text(encoding='utf-8'))
@@ -43,6 +43,9 @@ def load_settings():
     # Unlimited compression is an explicit choice for the current session.
     if defaults.get('full_hd_profile_version',0)<1:
         defaults.update(height=1080,speed='calidad',audio_kbps=512,full_hd_profile_version=1)
+    # Adopt the high-efficiency profile once; later explicit choices are retained.
+    if defaults.get('quality_profile_version',0)<1:
+        defaults.update(codec='h265',height=1080,speed='calidad',quality_profile_version=1)
     defaults['unlimited']=False
     defaults['compression_only']=True
     if not defaults.get('releases_url'):defaults['releases_url']='https://github.com/floresroldanluis/MBCompresorVideoIA'
@@ -115,7 +118,7 @@ class Item:
         self.path=path; self.info=None; self.state='Analizando'; self.output=None; self.recovery_target=None; self.track_defaults_applied=False
         self.output_dir=settings.get('output_folder','')
         self.options=engine.CompressionOptions(unlimited=bool(settings.get('unlimited',False)),max_gb=float(settings.get('max_gb',1.95)),
-            codec=settings.get('codec','h264'),speed=settings.get('speed','calidad'),
+            codec=settings.get('codec','h265'),speed=settings.get('speed','calidad'),
             height=int(settings.get('height',1080)),audio_kbps=int(settings.get('audio_kbps',512)),mode=settings.get('mode','auto'))
 
 class ItemOptions(QWidget):
@@ -200,7 +203,7 @@ class MainWindow(QMainWindow):
         compression=QWidget(); cl=QVBoxLayout(compression); cl.setContentsMargins(0,0,0,0); cl.setSpacing(12); self.pages.addWidget(compression)
         controls=card(); c=QVBoxLayout(controls); c.setContentsMargins(18,16,18,16)
         outrow=QHBoxLayout(); outrow.addWidget(label('Guardar en')); self.output=QLineEdit(self.settings.get('output_folder','')); self.output.setReadOnly(True); self.output.setPlaceholderText('Misma carpeta que cada video original'); outrow.addWidget(self.output,1); outrow.addWidget(button('Cambiar…',self.choose_output));outrow.addWidget(button('Usar carpeta original',self.original_output));  c.addLayout(outrow)
-        opts=QHBoxLayout(); self.limit=QDoubleSpinBox(); self.limit.setDecimals(4); self.limit.setRange(.0001,1000); self.limit.setValue(float(self.settings['max_gb'])); self.limit.setSuffix(' GB'); self.limit.setToolTip('Tamaño máximo por archivo. 1 GB = 1 000 000 000 bytes.'); self.codec=combo([('H.264 · compatible','h264'),('H.265 · más compresión','h265')],self.settings['codec']); self.speed=combo([('Rápido','rapido'),('Equilibrado','equilibrado'),('Máxima calidad','calidad')],self.settings['speed']); self.res=combo([('Original',0),('4K',2160),('1440p',1440),('Full HD · 1080p',1080),('720p',720),('480p',480)],self.settings['height'])
+        opts=QHBoxLayout(); self.limit=QDoubleSpinBox(); self.limit.setDecimals(4); self.limit.setRange(.0001,1000); self.limit.setValue(float(self.settings['max_gb'])); self.limit.setSuffix(' GB'); self.limit.setToolTip('Tamaño máximo por archivo. 1 GB = 1 000 000 000 bytes. Más GB permiten conservar más detalle, especialmente en películas largas.'); self.codec=combo([('H.265 / HEVC · priorizar calidad','h265'),('H.264 · compatible','h264')],self.settings['codec']); self.speed=combo([('Rápido','rapido'),('Equilibrado','equilibrado'),('Máxima calidad','calidad')],self.settings['speed']); self.res=combo([('Original',0),('4K',2160),('1440p',1440),('Full HD · 1080p',1080),('720p',720),('480p',480)],self.settings['height'])
         for text,w in [('Máximo por video con límite',self.limit),('Códec',self.codec),('Velocidad',self.speed),('Resolución',self.res)]:
             col=QVBoxLayout(); col.addWidget(label(text,'muted')); col.addWidget(w); opts.addLayout(col)
         self.unlimited=QCheckBox('Máximo por video sin límite');self.unlimited.setChecked(bool(self.settings.get('unlimited',False)))
@@ -208,10 +211,12 @@ class MainWindow(QMainWindow):
         col=QVBoxLayout();col.addStretch();col.addWidget(self.unlimited);opts.insertLayout(1,col)
         self.limit.setEnabled(not self.unlimited.isChecked());self.unlimited.toggled.connect(self.unlimited_changed)
         self.res.setToolTip('Full HD limita a 1920×1080 y conserva la proporción del video. No amplía videos pequeños. Un límite de GB muy bajo reduce el detalle.')
+        self.codec.setToolTip('H.265/HEVC conserva más detalle por tamaño. H.264 ofrece compatibilidad con equipos antiguos.')
         c.addLayout(opts)
         mode_row=QHBoxLayout();mode_row.addWidget(label('Modo de compresión'));self.mode=combo(MODES,self.settings.get('mode','auto'));mode_row.addWidget(self.mode,1);c.addLayout(mode_row)
         self.mode.setToolTip('Automático elige NVIDIA si supera una prueba real; si falla usa CPU. CPU prioriza calidad por tamaño con dos pasadas.')
         self.mode.currentIndexChanged.connect(self.mode_changed);self.speed.setEnabled(self.mode.currentData()!='cpu')
+        quality_note=label('1080p fija la resolución. H.265 aprovecha mejor el espacio; aumenta los GB para conservar más detalle en videos largos.','muted');quality_note.setWordWrap(True);c.addWidget(quality_note)
         c.addWidget(button('Aplicar estos ajustes a los pendientes',self.apply_globals)); cl.addWidget(controls)
         self.recovery_notice=button('Recuperar guardados pendientes',self.restore_pending_saves);self.recovery_notice.hide();cl.addWidget(self.recovery_notice)
         bar=QHBoxLayout(); self.queue_title=label('COLA DE COMPRESIÓN  /  0 VIDEOS','eyebrow'); bar.addWidget(self.queue_title); bar.addStretch()
@@ -615,7 +620,7 @@ def main():
     if len(sys.argv)>2 and sys.argv[1]=='--smoke-test':
         def verify():
             destination=Path(sys.argv[2]);destination.mkdir(parents=True,exist_ok=True)
-            report=dict(unlimited_checked=window.unlimited.isChecked(),size_limit_enabled=window.limit.isEnabled(),max_gb=window.limit.value(),version=VERSION,frozen=bool(getattr(sys,'frozen',False)),tools=engine.discover_tools())
+            report=dict(unlimited_checked=window.unlimited.isChecked(),size_limit_enabled=window.limit.isEnabled(),max_gb=window.limit.value(),codec=window.codec.currentData(),height=window.res.currentData(),speed=window.speed.currentData(),version=VERSION,frozen=bool(getattr(sys,'frozen',False)),tools=engine.discover_tools())
             try:
                 from settings_dialog import SettingsDialog
                 dialog=SettingsDialog(window.settings,window,check_motors_on_open=False);dialog.show();application.processEvents();dialog.grab().save(str(destination/'settings.png'));dialog.reject()
