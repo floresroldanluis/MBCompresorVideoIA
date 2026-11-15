@@ -13,10 +13,11 @@ from pathlib import Path
 import tempfile
 import threading
 import time
+from size_units import maximum_bytes
 
 
 SCHEMA=1
-PROFILE_REVISION='nvenc-vbr-p6-qres-high-2026-11'
+PROFILE_REVISION='nvenc-vbr-windows-gib-p6-qres-high-2026-11'
 MIN_DURATION=60.0
 MAX_RECORDS=128
 MAX_HISTORY_BYTES=262144
@@ -71,7 +72,7 @@ def build_context(source,ffmpeg,ffprobe,options,driver,source_info):
         if not driver:return None
         source_signature=_source_signature(source)
         for key in ('output_name','output_dir','output_folder'):values.pop(key,None)
-        cap=int(maximum*1_000_000_000)
+        cap=maximum_bytes(maximum)
         width=int(source_info['width']);height=int(source_info['height'])
         chosen_height=int(values.get('height') or height)
         output_height=min(height,chosen_height)

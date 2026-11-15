@@ -46,3 +46,9 @@ Los registros muestran dos codificaciones completas: el primer bitrate de 1103 k
 La calibración solo evita repetir trabajo ya medido cuando coincide el perfil. Los errores del historial no impiden comprimir ni convierten un MP4 ya guardado en fallo. No modifica resolución, FPS, preset ni control de bitrate. Los reintentos y la verificación de bytes permanecen activos.
 
 La IA de Ollama se comprobó mediante inferencia HTTP en loopback, sin enviar imágenes, video, títulos o rutas. Respeta el perfil elegido y libera su modelo tras la respuesta. Es un asesor opcional de ajustes, no un codificador neural de video.
+
+## Unidad de Windows a partir de 1.0.48
+
+El máximo se interpreta ahora como el GB que muestra Windows (GiB): 1.95 corresponde a floor(1.95 × 1024³) = 2 093 796 556 bytes. Es un presupuesto aproximadamente 143.8 MB decimales mayor que el límite anterior de 1 950 000 000 bytes. La pantalla y el asesor local usan el mismo límite exacto del codificador.
+
+El margen, VBR y reajustes conservan la calidad y la comprobación estricta del máximo. No se garantiza llenar exactamente el archivo ni recuperar detalle que no tenga el original. Los números y mediciones de las secciones 1.0.46 y 1.0.47 describen esas versiones históricas; no representan el nuevo límite de 1.95 de Windows. Los archivos ya codificados no se modifican por actualizar.

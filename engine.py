@@ -4,7 +4,8 @@ Public API: discover_tools(), probe(path), CompressionOptions, Control,
 compress(source, output_dir, options, control=None, progress=None, log=None).
 Stream selections are absolute ffprobe stream indices. None audio selects all;
 subtitles are opt-in text streams, converted to MP4 selectable mov_text tracks.
-max_gb uses decimal GB. A result is published only after verifying its byte cap.
+max_gb uses binary GB as shown by Windows (GiB, 1024**3 bytes per unit).
+A result is published only after verifying its exact byte cap.
 Callbacks run on the calling worker thread. No network or external AI service.
 """
 from __future__ import annotations
@@ -23,6 +24,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
+from size_units import BYTES_PER_GB,maximum_bytes
 
 class EncodeError(RuntimeError): pass
 class EncodeCancelled(EncodeError): pass
@@ -398,7 +400,7 @@ def compress(source, output_dir, options, control=None, progress=None, log=None,
     info=probe(source,ffprobe); source=Path(source).resolve(); out=Path(output_dir).resolve(); out.mkdir(parents=True,exist_ok=True)
     if options.codec not in ('h264','h265'): raise EncodeError('Códec no válido.')
     if not options.unlimited and (not math.isfinite(options.max_gb) or options.max_gb<=0): raise EncodeError('El límite de tamaño debe ser positivo.')
-    cap=None if options.unlimited else int(options.max_gb*1_000_000_000)
+    cap=None if options.unlimited else maximum_bytes(options.max_gb)
     output_name=options.output_name
     if output_name is not None:
         output_name=output_name.strip()
@@ -436,7 +438,7 @@ def compress(source, output_dir, options, control=None, progress=None, log=None,
         audio_budget=sum(rate if rate is not None else audio_rate for rate in audio_copy_rates)
         bitrate=int(budget-audio_budget)
         if bitrate<20000: raise EncodeError('El límite de tamaño es demasiado pequeño para este video.')
-        log(f'Presupuesto de salida: máximo {cap/1e9:.3f} GB; video {bitrate//1000} kb/s, audio hasta {audio_budget//1000} kb/s. Se verifica el tamaño final en bytes.')
+        log(f'Presupuesto de salida: máximo {cap/BYTES_PER_GB:.3f} GB de Windows ({cap} bytes); video {bitrate//1000} kb/s, audio hasta {audio_budget//1000} kb/s. Se verifica el tamaño final en bytes.')
     else:
         log('Sin límite de tamaño: calidad visual alta (CRF/CQ 18), sin reducir bitrate para alcanzar GB. El tamaño final depende del contenido.')
     height=min(info['height'],options.height or info['height']); width=info['width']
@@ -602,7 +604,7 @@ def compress(source, output_dir, options, control=None, progress=None, log=None,
                 if next_bitrate is None or attempt==3:
                     result=best['path'];actual=best['actual'];preserve_result=True
                     break
-                log(f'Salida válida de {actual/1e9:.3f} GB ({actual/cap:.1%} del máximo). Se refina desde el original para aprovechar más bitrate de video: {bitrate//1000} → {next_bitrate//1000} kb/s; el MP4 anterior se conserva.')
+                log(f'Salida válida de {actual/BYTES_PER_GB:.3f} GB de Windows ({actual/cap:.1%} del máximo). Se refina desde el original para aprovechar más bitrate de video: {bitrate//1000} → {next_bitrate//1000} kb/s; el MP4 anterior se conserva.')
                 discard_other_results(best['path'])
                 bitrate=next_bitrate
                 continue
@@ -633,7 +635,7 @@ def compress(source, output_dir, options, control=None, progress=None, log=None,
             except Exception:
                 log('MP4 guardado; no se pudo registrar la calibración local opcional.')
         if progress: progress(dict(percent=100,speed=0,eta=0,pass_number=total_passes,total_passes=total_passes,backend=backend,status='Completado'))
-        log(f'Guardado: {target.name} ({actual/1e6:.2f} MB).')
+        log(f'Guardado: {target.name} ({actual/BYTES_PER_GB:.3f} GB de Windows; {actual} bytes).')
         return target
     finally:
         if preserve_result:

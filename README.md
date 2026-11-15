@@ -2,17 +2,17 @@
 
 <p align="center"><img src="assets/mb-logo-02.png" width="180" alt="MB Compresor de Video IA"></p>
 
-Compresor de escritorio para Windows de 64 bits. Exporta videos locales a MP4 de alta calidad con control de tamaño máximo. Versión **1.0.47**.
+Compresor de escritorio para Windows de 64 bits. Exporta videos locales a MP4 de alta calidad con control de tamaño máximo. Versión **1.0.48**.
 
 ## Descargar
 
-En [Releases](https://github.com/floresroldanluis/MBCompresorVideoIA/releases/latest), descarga **MBCompresorVideoIA-Setup-v1.0.47-windows-x64.exe** y sigue el asistente. Incluye FFmpeg y FFprobe; no requiere Python. Para usar la versión portátil, extrae toda la carpeta del ZIP antes de abrir `MB Compresor Pro.exe`.
+En [Releases](https://github.com/floresroldanluis/MBCompresorVideoIA/releases/latest), descarga **MBCompresorVideoIA-Setup-v1.0.48-windows-x64.exe** y sigue el asistente. Incluye FFmpeg y FFprobe; no requiere Python. Para usar la versión portátil, extrae toda la carpeta del ZIP antes de abrir `MB Compresor Pro.exe`.
 
 ## Funciones
 
 - Cola con arrastrar y soltar, selección de archivos y carpetas.
 - MP4 H.264/H.265 con Automático, NVIDIA rápido con alta calidad y CPU para priorizar calidad por tamaño.
-- Límite decimal en GB con verificación final, o calidad constante sin límite de tamaño. La casilla sin límite siempre inicia desmarcada.
+- Límite en GB según Windows con verificación final, o calidad constante sin límite de tamaño. La casilla sin límite siempre inicia desmarcada.
 - Cola dinámica: agregar o quitar pendientes durante la compresión. Desplazamiento manual libre y enfoque automático solo al iniciar el siguiente video.
 - Estado explícito de instalación, compatibilidad y actualización de motores.
 - 1080p sin ampliar videos pequeños, selección de audio y subtítulos, recorte y FPS.
@@ -40,7 +40,7 @@ FFmpeg/FFprobe pueden estar en PATH o en `tools/`. Configuración también permi
 
 Para compilar, coloca `ffmpeg.exe` y `ffprobe.exe` en `tools/` (puedes obtenerlos del ZIP publicado) y ejecuta `Construir.ps1`. Con [Inno Setup 6](https://jrsoftware.org/isinfo.php) instalado, `Construir-Instalador.ps1` genera el instalador.
 
-`Preparar-Release.ps1 -ReleaseVersion 1.0.47` genera el ZIP del actualizador y `SHA256SUMS`. La etiqueta del Release, el paquete y `app.py` deben usar la misma versión.
+`Preparar-Release.ps1 -ReleaseVersion 1.0.48` genera el ZIP del actualizador y `SHA256SUMS`. La etiqueta del Release, el paquete y `app.py` deben usar la misma versión.
 
 ## Pruebas
 
@@ -103,3 +103,11 @@ El historial local reutiliza un bitrate ya validado solo al repetir el mismo vid
 Configuración permite comprobar Ollama/modelos y ejecutar Probar IA local. El asesor mantiene las elecciones explícitas de calidad, recibe solo metadatos técnicos y libera su modelo tras la consulta. Una vez instalado el modelo funciona sin internet; HEVC/NVIDIA sigue realizando la compresión.
 
 Motores de descarga separa Buscar motores (consulta) de Instalar actualizaciones o reparar (cambios explícitos). Se conservan motores saludables/actualizados y NVIDIA compatible. La búsqueda y descarga de versiones nuevas requiere conexión.
+
+## Límite de Windows y resumen de cola 1.0.48
+
+Máximo por video con límite utiliza ahora la misma medida que Windows: 1.95 equivale a 1.95 GiB, con un techo exacto de 2 093 796 556 bytes. La pantalla, el codificador, el historial y el asesor local comparten esa conversión. Se conserva el valor numérico configurado y se invalida la calibración del límite decimal anterior.
+
+Se usa el presupuesto para conservar detalle en la resolución elegida y se verifica que ningún MP4 publicado supere el máximo. El tamaño real puede quedar algo por debajo; los archivos anteriores no se modifican al actualizar.
+
+Limpiar terminados también reinicia el resumen a Listo para comprimir, progreso 0% y contadores, cuando no hay trabajo de compresión o guardado activo. Mantiene pendientes, originales y MP4 guardados.

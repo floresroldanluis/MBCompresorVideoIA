@@ -1,4 +1,4 @@
-"""Decimal/binary size labels describe the same bytes and update with the limit."""
+"""The entered limit and final output use the same size measure as Windows."""
 import os
 os.environ.setdefault('QT_QPA_PLATFORM','offscreen')
 from pathlib import Path
@@ -24,13 +24,13 @@ class SizeUnitsTests(unittest.TestCase):
         self.window._allow_close=True;self.window.close();self.window.deleteLater();self.qt.processEvents();QCoreApplication.sendPostedEvents(None,QEvent.DeferredDelete)
     def test_limit_hint_updates_both_units(self):
         self.assertIn('1.95 GB',self.window.quality_note.text())
-        self.assertIn('1.82 GiB',self.window.quality_note.text())
+        self.assertIn('según Windows (GiB)',self.window.quality_note.text())
         self.window.limit.setValue(3.5)
-        self.assertIn('3.26 GiB',self.window.quality_note.text())
+        self.assertIn('3.5 GB según Windows',self.window.quality_note.text())
         self.window.unlimited.setChecked(True)
         self.assertIn('Sin límite',self.window.quality_note.text())
         self.assertFalse(self.window.limit.isEnabled())
-    def test_completed_movie_shows_same_bytes_in_gb_and_gib(self):
+    def test_previous_completed_movie_uses_windows_size_and_new_maximum(self):
         item=app.Item('source.mkv',self.window.settings)
         item.info=dict(duration=11304.704,size=9578490766,width=1920,height=1080,audio=[],subtitles=[])
         self.window.items=[item];self.window.build_row(item)
@@ -38,9 +38,19 @@ class SizeUnitsTests(unittest.TestCase):
         with patch.object(app,'Path',return_value=output):
             self.window._apply_output_result(item,'Completado','output.mp4')
         text=self.window.rows[item.path]['detail'].text()
-        for expected in ('1.93 GB','1.79 GiB','ahorro 80%','98.7% del límite'):
+        for expected in ('1.79 GB (Windows)','ahorro 80%','92.0% del límite'):
             self.assertIn(expected,text)
         self.assertIn('1925529102 bytes',self.window.logs.toPlainText())
+
+    def test_output_near_the_limit_shows_the_same_size_as_windows(self):
+        item=app.Item('new.mkv',self.window.settings)
+        item.info=dict(duration=11304.704,size=9578490766,width=1920,height=1080,audio=[],subtitles=[])
+        self.window.items=[item];self.window.build_row(item)
+        output=SimpleNamespace(stat=lambda:SimpleNamespace(st_size=2090000000))
+        with patch.object(app,'Path',return_value=output):
+            self.window._apply_output_result(item,'Completado','new.mp4')
+        self.assertIn('1.95 GB (Windows)',self.window.rows[item.path]['detail'].text())
+        self.assertIn('99.8% del límite',self.window.rows[item.path]['detail'].text())
 
 
 if __name__=='__main__':unittest.main()

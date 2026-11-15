@@ -47,6 +47,14 @@ class LocalAIChecks(unittest.TestCase):
             fps='0/0',codec='C:/private/title.mp4',size=-1))
         self.assertEqual(facts,{})
 
+    def test_adviser_receives_the_same_windows_limit_as_the_encoder(self):
+        self.recommend()
+        payload=next(payload for path,payload in self.requests if path=='/api/generate')
+        prompt=json.loads(payload['prompt'])
+        self.assertEqual(prompt['maximum_windows_gb'],1.95)
+        self.assertEqual(prompt['maximum_bytes'],2093796556)
+        self.assertNotIn('maximum_decimal_gb',prompt)
+
     def test_explicit_resolution_and_original_fps_are_preserved(self):
         advice=self.recommend(dict(duration=120,height=1080,width=1920,fps=24,profile_height=1080,profile_fps=0))
         self.assertEqual((advice['resolution'],advice['fps']),(1080,0))

@@ -1,4 +1,4 @@
-# MB Compresor de Video IA · versión 1.0.47
+# MB Compresor de Video IA · versión 1.0.48
 
 Compresor de video de escritorio para Windows. Su función es transformar videos locales a MP4 de alta calidad, con un tamaño máximo por archivo.
 
@@ -113,3 +113,11 @@ NVIDIA puede requerir otra codificación si la primera supera el máximo. En el 
 Ollama y qwen3:0.6b son un asesor local opcional. Buscar modelos locales comprueba instalación; Probar IA local ejecuta una inferencia real. El asesor conserva las elecciones explícitas de códec, resolución, FPS y calidad de audio/preset. Solo recibe metadatos técnicos; el video permanece en el equipo. La consulta libera el modelo al terminar. El modelo no sustituye a HEVC/NVIDIA ni garantiza mayor compresión o velocidad.
 
 Motores de descarga tiene dos pasos: Buscar motores solo consulta versiones y estado; Instalar actualizaciones o reparar aplica las actualizaciones estables o reparaciones necesarias. Los motores saludables y actuales se conservan. La compresión y la IA ya instalada funcionan sin internet; buscar y descargar nuevas versiones de motores requiere conexión.
+
+## Límite según Windows y limpiar terminados (1.0.48)
+
+Desde 1.0.48, el número de Máximo por video con límite utiliza la misma medida que el Explorador de Windows: 1 GB mostrado equivale a 1 GiB, 1 073 741 824 bytes. Un valor de 1.95 permite como máximo 2 093 796 556 bytes, redondeados hacia abajo. El resultado se muestra con esa misma unidad. La aplicación ya no interpreta ese campo como GB decimales; el número configurado se conserva.
+
+El motor utiliza ese presupuesto para retener detalle en la resolución elegida, comprueba los bytes finales y reajusta si fuera necesario. El archivo puede quedar algo por debajo: el valor es un máximo, no un tamaño exacto ni relleno. Los resultados ya creados conservan su tamaño. Las calibraciones calculadas con el límite decimal anterior no se reutilizan bajo el máximo nuevo.
+
+Limpiar terminados elimina las filas completadas y, cuando no hay compresión ni guardado activo, reinicia el resumen, la barra al 0% y los contadores. Se conservan pendientes y archivos originales/resultados. Durante una compresión respeta el video activo.

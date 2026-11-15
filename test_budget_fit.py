@@ -44,7 +44,7 @@ class BudgetFitChecks(unittest.TestCase):
 
     def compress(self,actions,options=None,control=None):
         self.actions=actions
-        options=options or engine.CompressionOptions(mode='nvidia',max_gb=.0001)
+        options=options or engine.CompressionOptions(mode='nvidia',max_gb=100000/2**30)
         with patch.object(engine,'probe',side_effect=self.probe),patch.object(engine,'_run',side_effect=self.encode),patch('acceleration.find_nvenc',return_value=dict(available=True,path='gpu-ffmpeg')):
             output=engine.compress(self.source,self.root,options,control=control,log=self.messages.append,ffmpeg='ffmpeg',ffprobe='ffprobe')
         self.assertEqual(self.source.read_bytes(),b'original video, never replace')
@@ -75,14 +75,14 @@ class BudgetFitChecks(unittest.TestCase):
         self.assertEqual(len(self.paths),1)
 
     def test_no_upward_refinement_for_cpu_or_unlimited(self):
-        for options in (engine.CompressionOptions(mode='cpu',max_gb=.0001),engine.CompressionOptions(mode='nvidia',unlimited=True)):
+        for options in (engine.CompressionOptions(mode='cpu',max_gb=100000/2**30),engine.CompressionOptions(mode='nvidia',unlimited=True)):
             self.calls=[];self.paths=[]
             output=self.compress([80000],options)
             self.assertEqual(output.stat().st_size,80000)
             self.assertEqual(len(self.paths),1)
 
     def test_failed_refinement_keeps_the_verified_candidate_without_cpu_fallback(self):
-        output=self.compress([80000,engine.EncodeError('refinement failed')],engine.CompressionOptions(mode='auto',max_gb=.0001))
+        output=self.compress([80000,engine.EncodeError('refinement failed')],engine.CompressionOptions(mode='auto',max_gb=100000/2**30))
         self.assertEqual(output.read_bytes(),self.output_payloads[0])
         self.assertEqual(len(self.paths),2)
         self.assertTrue(all(cmd[0]=='gpu-ffmpeg' for cmd in self.calls))

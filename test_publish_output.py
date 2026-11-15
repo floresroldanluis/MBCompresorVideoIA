@@ -197,7 +197,7 @@ class PublishOutputTests(unittest.TestCase):
         self.assertFalse(self.target.exists())
 
     def test_oversized_output_is_not_retained_or_published(self):
-        self.options.unlimited=False;self.options.max_gb=.0001
+        self.options.unlimited=False;self.options.max_gb=100000/2**30
         def encode(cmd,*args):
             if Path(cmd[-1]).suffix=='.part':Path(cmd[-1]).write_bytes(b'x'*100001)
         with patch.object(engine,'_retry_video_bitrate',return_value=50000):

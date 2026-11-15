@@ -23,7 +23,7 @@ import engine
 from acceleration import MODES
 from local_ai import OllamaClient
 
-VERSION = '1.0.47'
+VERSION = '1.0.48'
 DATA = (Path(os.environ.get('USERPROFILE',str(Path.home())))/'AppData'/'Local' if os.name=='nt' else Path(os.environ.get('LOCALAPPDATA',str(Path.home()))))/'MBCompresorPro'
 CONFIG = DATA / 'settings.json'
 
@@ -80,11 +80,10 @@ def combo(items, current=None):
 def card():
     f=QFrame(); f.setObjectName('card'); return f
 
-def fmt_size(n): return f'{n/1e9:.2f} GB' if n>=1e9 else f'{n/1e6:.1f} MB'
+def fmt_size(n): return f'{n/engine.BYTES_PER_GB:.2f} GB' if n>=engine.BYTES_PER_GB else f'{n/(engine.BYTES_PER_GB/1024):.1f} MB'
 
 def fmt_output_size(n):
-    if n>=1e9:return f'{n/1e9:.2f} GB / {n/2**30:.2f} GiB (Windows)'
-    return f'{n/1e6:.1f} MB / {n/2**20:.1f} MiB (Windows)'
+    return fmt_size(n)+' (Windows)'
 def fmt_time(n):
     n=int(n or 0); return f'{n//3600:02d}:{n%3600//60:02d}:{n%60:02d}'
 
@@ -207,7 +206,7 @@ class MainWindow(QMainWindow):
         compression=QWidget(); cl=QVBoxLayout(compression); cl.setContentsMargins(0,0,0,0); cl.setSpacing(12); self.pages.addWidget(compression)
         controls=card(); c=QVBoxLayout(controls); c.setContentsMargins(18,16,18,16)
         outrow=QHBoxLayout(); outrow.addWidget(label('Guardar en')); self.output=QLineEdit(self.settings.get('output_folder','')); self.output.setReadOnly(True); self.output.setPlaceholderText('Misma carpeta que cada video original'); outrow.addWidget(self.output,1); outrow.addWidget(button('Cambiar…',self.choose_output));outrow.addWidget(button('Usar carpeta original',self.original_output));  c.addLayout(outrow)
-        opts=QHBoxLayout(); self.limit=QDoubleSpinBox(); self.limit.setDecimals(4); self.limit.setRange(.0001,1000); self.limit.setValue(float(self.settings['max_gb'])); self.limit.setSuffix(' GB'); self.limit.setToolTip('Tamaño máximo por archivo. 1 GB = 1 000 000 000 bytes. Más GB permiten conservar más detalle, especialmente en películas largas.'); self.codec=combo([('H.265 / HEVC · priorizar calidad','h265'),('H.264 · compatible','h264')],self.settings['codec']); self.speed=combo([('Rápido','rapido'),('Equilibrado','equilibrado'),('Máxima calidad','calidad')],self.settings['speed']); self.res=combo([('Original',0),('4K',2160),('1440p',1440),('Full HD · 1080p',1080),('720p',720),('480p',480)],self.settings['height'])
+        opts=QHBoxLayout(); self.limit=QDoubleSpinBox(); self.limit.setDecimals(4); self.limit.setRange(.0001,1000); self.limit.setValue(float(self.settings['max_gb'])); self.limit.setSuffix(' GB'); self.limit.setToolTip('Límite según Windows: 1 GB = 1 073 741 824 bytes (1 GiB). El MP4 final no supera este máximo. Más GB permiten conservar más detalle.'); self.codec=combo([('H.265 / HEVC · priorizar calidad','h265'),('H.264 · compatible','h264')],self.settings['codec']); self.speed=combo([('Rápido','rapido'),('Equilibrado','equilibrado'),('Máxima calidad','calidad')],self.settings['speed']); self.res=combo([('Original',0),('4K',2160),('1440p',1440),('Full HD · 1080p',1080),('720p',720),('480p',480)],self.settings['height'])
         for text,w in [('Máximo por video con límite',self.limit),('Códec',self.codec),('Velocidad',self.speed),('Resolución',self.res)]:
             col=QVBoxLayout(); col.addWidget(label(text,'muted')); col.addWidget(w); opts.addLayout(col)
         self.unlimited=QCheckBox('Máximo por video sin límite');self.unlimited.setChecked(bool(self.settings.get('unlimited',False)))
@@ -299,7 +298,7 @@ class MainWindow(QMainWindow):
             self.quality_note.setText('Sin límite de tamaño. 1080p fija la resolución; la nitidez depende del original y de la codificación.')
         else:
             maximum=self.limit.value()
-            self.quality_note.setText(f'Límite: {maximum:g} GB decimales = {maximum*1e9/2**30:.2f} GiB en Windows. 1080p fija la resolución; más GB permiten conservar más detalle.')
+            self.quality_note.setText(f'Límite: {maximum:g} GB según Windows (GiB). Se aprovecha para conservar detalle y se verifica que el MP4 no supere ese máximo.')
     def apply_globals(self):
         for i in self.items:
             if i.state in ('Pendiente','Error','Cancelado'):
@@ -387,6 +386,16 @@ class MainWindow(QMainWindow):
     def clear_finished(self):
         for i in self.items[:]:
             if i.state=='Completado':self.remove_item(i)
+        self._reset_idle_summary()
+    def _reset_idle_summary(self):
+        if self.active or self.saving:return
+        self._run_paths=[];self._run_processed=set();self._current_path=None;self._current_percent=0.
+        self.total_count=0;self.completed_count=0;self.control=None
+        self.paused=False;self.disk_paused=False;self.stop_event.clear()
+        self.status.setText('Listo para comprimir.');self.total_progress.setValue(0)
+        self.pause_btn.setText('Pausar');self.pause_btn.setEnabled(False);self.stop_btn.setEnabled(False)
+        available=not (self.ai_busy or self.downloading)
+        self.start_btn.setEnabled(available);self.ai_btn.setEnabled(available)
     def update_title(self):self.queue_title.setText(f'COLA DE COMPRESIÓN  /  {len(self.items)} VIDEOS')
     def open_result(self,item):
         if item.output:QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(item.output).parent)))
@@ -471,7 +480,7 @@ class MainWindow(QMainWindow):
         elif state=='Completado':
             item.output=value;item.recovery_target=None;item.state=state;row['progress'].setValue(100)
             size=Path(value).stat().st_size;saved=1-size/item.info['size'] if item.info and item.info.get('size') else 0
-            limit_detail='calidad sin límite de tamaño' if item.options.unlimited else f'{size/(item.options.max_gb*1e9):.1%} del límite'
+            limit_detail='calidad sin límite de tamaño' if item.options.unlimited else f'{size/engine.maximum_bytes(item.options.max_gb):.1%} del límite'
             row['detail'].setText(f'{fmt_output_size(size)} · ahorro {saved:.0%} · '+limit_detail)
             row['detail'].setToolTip(f'{size} bytes. Ahorro: reducción de tamaño respecto al original; no es un porcentaje de calidad.')
             self.log(f'Tamaño final: {fmt_output_size(size)} ({size} bytes). Ahorro de espacio: {saved:.0%}.')
@@ -635,7 +644,7 @@ def main():
     if len(sys.argv)>2 and sys.argv[1]=='--smoke-test':
         def verify():
             destination=Path(sys.argv[2]);destination.mkdir(parents=True,exist_ok=True)
-            report=dict(unlimited_checked=window.unlimited.isChecked(),size_limit_enabled=window.limit.isEnabled(),max_gb=window.limit.value(),codec=window.codec.currentData(),height=window.res.currentData(),speed=window.speed.currentData(),size_hint=window.quality_note.text(),version=VERSION,frozen=bool(getattr(sys,'frozen',False)),tools=engine.discover_tools())
+            report=dict(unlimited_checked=window.unlimited.isChecked(),size_limit_enabled=window.limit.isEnabled(),max_gb=window.limit.value(),max_bytes=engine.maximum_bytes(window.limit.value()),codec=window.codec.currentData(),height=window.res.currentData(),speed=window.speed.currentData(),size_hint=window.quality_note.text(),version=VERSION,frozen=bool(getattr(sys,'frozen',False)),tools=engine.discover_tools())
             try:
                 from settings_dialog import SettingsDialog
                 dialog=SettingsDialog(window.settings,window,check_motors_on_open=False);dialog.show();application.processEvents();report['motor_actions']=[b.text() for b in dialog.motor_buttons];dialog.grab().save(str(destination/'settings.png'));dialog.reject()

@@ -20,7 +20,7 @@ class RateHistoryTests(unittest.TestCase):
         self.ffmpeg=self.root/'encoder.exe';self.ffmpeg.write_bytes(b'encoder binary')
         self.ffprobe=self.root/'probe.exe';self.ffprobe.write_bytes(b'probe binary')
         self.output=self.root/'output.mp4';self.output.write_bytes(b'v'*980000)
-        self.options=engine.CompressionOptions(codec='h265',height=240,max_gb=.001)
+        self.options=engine.CompressionOptions(codec='h265',height=240,max_gb=1000000/2**30)
         self.info=dict(duration=120.,width=320,height=240,video={'index':0,'avg_frame_rate':'24/1'},audio=[],subtitles=[])
         self.cache=self.root/'state/history.json'
         self.context=self.context_for()
@@ -59,7 +59,7 @@ class RateHistoryTests(unittest.TestCase):
 
     def test_changed_profile_limit_driver_binary_or_source_misses(self):
         self.assertTrue(self.record())
-        changed=copy.copy(self.options);changed.max_gb=.0011
+        changed=copy.copy(self.options);changed.max_gb=1100000/2**30
         other=copy.copy(self.options);other.audio_indices=[]
         for context in (self.context_for(options=changed),self.context_for(options=other),
                         self.context_for(driver='GPU test, driver 2')):

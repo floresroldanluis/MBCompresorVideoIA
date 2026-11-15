@@ -49,7 +49,7 @@ class EncodingPlanChecks(unittest.TestCase):
                     size=120000 if oversize and len(calls)==2 else 80000
                     Path(cmd[-1]).write_bytes(b'0'*size)
             with patch('engine.probe',return_value=info),patch('engine._run',side_effect=run),patch('acceleration.find_nvenc',return_value={'available':True,'path':'ffmpeg'}):
-                options=engine.CompressionOptions(mode=mode,codec=codec,max_gb=.0001,unlimited=unlimited)
+                options=engine.CompressionOptions(mode=mode,codec=codec,max_gb=100000/2**30,unlimited=unlimited)
                 if cancel_retry:
                     with self.assertRaises(engine.EncodeCancelled):
                         engine.compress(source,root,options,ffmpeg='ffmpeg',log=messages.append,progress=events.append)
@@ -114,7 +114,7 @@ class RealAnalysisReuseChecks(unittest.TestCase):
                         cmd[index]=str(int(cmd[index])*3)
                     return run(cmd,*args,**kwargs)
                 with patch('engine._run',side_effect=force_oversize_once):
-                    output=engine.compress(source,root,engine.CompressionOptions(mode='cpu',codec=codec,max_gb=.00012),ffmpeg=ffmpeg,ffprobe=ffprobe)
+                    output=engine.compress(source,root,engine.CompressionOptions(mode='cpu',codec=codec,max_gb=120000/2**30),ffmpeg=ffmpeg,ffprobe=ffprobe)
                 self.assertGreaterEqual(len(calls),3)
                 self.assertEqual(sum(cmd[-1]==engine.os.devnull for cmd in calls),1)
                 self.assertLessEqual(output.stat().st_size,120000)
@@ -170,7 +170,7 @@ class CappedAudioCopyChecks(unittest.TestCase):
                 calls.append(cmd)
                 if Path(cmd[-1]).suffix=='.part':Path(cmd[-1]).write_bytes(b'0'*80000)
             with patch('engine.probe',return_value=info),patch('engine._run',side_effect=run):
-                engine.compress(source,root,engine.CompressionOptions(mode='cpu',max_gb=.0001),ffmpeg='ffmpeg')
+                engine.compress(source,root,engine.CompressionOptions(mode='cpu',max_gb=100000/2**30),ffmpeg='ffmpeg')
             # 788 kb/s total; 98.5 kb/s budget per audio track. Only the 64 kb/s
             # AAC fits. The 200 kb/s track keeps its 98.5 kb/s AAC encode budget.
             for cmd in calls:self.assertEqual(cmd[cmd.index('-b:v')+1],'625500')
@@ -197,7 +197,7 @@ class CappedAudioCopyChecks(unittest.TestCase):
                 def capture(cmd,*args,**kwargs):
                     calls.append(cmd);return run(cmd,*args,**kwargs)
                 with patch('engine._run',side_effect=capture):
-                    output=engine.compress(source,root,engine.CompressionOptions(mode=mode,max_gb=.0003),ffmpeg=ffmpeg,ffprobe=ffprobe)
+                    output=engine.compress(source,root,engine.CompressionOptions(mode=mode,max_gb=300000/2**30),ffmpeg=ffmpeg,ffprobe=ffprobe)
                 self.assertLessEqual(output.stat().st_size,300000)
                 self.assertEqual(audio_hash(output),expected)
                 self.assertEqual(source.read_bytes(),original)
@@ -220,7 +220,7 @@ class CappedAudioCopyChecks(unittest.TestCase):
                     return hashlib.sha256(subprocess.check_output([ffmpeg,'-v','error','-i',str(path),'-map','0:a:0','-c:a','copy','-f',audio_codec,'-'],**engine._flags())).digest()
                 expected=audio_hash(source)
                 for mode in modes:
-                    output=engine.compress(source,root,engine.CompressionOptions(mode=mode,codec='h265',max_gb=.0004),ffmpeg=ffmpeg,ffprobe=ffprobe)
+                    output=engine.compress(source,root,engine.CompressionOptions(mode=mode,codec='h265',max_gb=400000/2**30),ffmpeg=ffmpeg,ffprobe=ffprobe)
                     self.assertLessEqual(output.stat().st_size,400000)
                     self.assertEqual(audio_hash(output),expected)
                     audio=engine.probe(output,ffprobe)['audio'][0]
