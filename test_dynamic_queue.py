@@ -8,6 +8,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import QCoreApplication,QEvent
 import app
 
 class DynamicQueueTests(unittest.TestCase):
@@ -49,7 +50,7 @@ class DynamicQueueTests(unittest.TestCase):
         if self.window.active:self.window.stop()
         self.wait_for(lambda:not self.window.active)
         if hasattr(self.window,'worker'):self.window.worker.join(5)
-        self.qt.processEvents();self.window.close()
+        self.qt.processEvents();self.window.close();self.window.deleteLater();QCoreApplication.sendPostedEvents(None,QEvent.DeferredDelete)
         for p in reversed(self.patches):p.stop()
         self.temp.cleanup()
     def test_scroll_follows_only_when_next_video_starts(self):

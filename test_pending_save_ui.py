@@ -3,6 +3,7 @@ os.environ.setdefault('QT_QPA_PLATFORM','offscreen')
 from pathlib import Path
 from unittest.mock import patch
 from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import QCoreApplication,QEvent
 import app
 class PendingSaveUITests(unittest.TestCase):
  @classmethod
@@ -48,8 +49,9 @@ class PendingSaveUITests(unittest.TestCase):
  def tearDown(self):
   for w in self.windows:
    if hasattr(w,'save_worker'):w.save_worker.join(5)
-   w._allow_close=True;w.close()
-  self.qt.processEvents()
+   w._allow_close=True;w.close();w.deleteLater()
+  self.qt.processEvents();QCoreApplication.sendPostedEvents(None,QEvent.DeferredDelete)
+  self.windows.clear()
   for p in reversed(self.patches):p.stop()
   self.temp.cleanup()
 if __name__=='__main__':unittest.main()

@@ -10,7 +10,7 @@ import threading
 import time
 import traceback
 
-from PySide6.QtCore import Qt, QObject, Signal, QTimer, QPropertyAnimation, QEasingCurve
+from PySide6.QtCore import Qt, QObject, Signal, QTimer, QPropertyAnimation, QEasingCurve, QCoreApplication, QEvent
 from PySide6.QtGui import QAction, QDesktopServices, QIcon, QPainter, QPalette, QFontDatabase, QPixmap, QBitmap, QRegion
 from PySide6.QtCore import QUrl
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
@@ -23,7 +23,7 @@ import engine
 from acceleration import MODES
 from local_ai import OllamaClient
 
-VERSION = '1.0.46'
+VERSION = '1.0.47'
 DATA = (Path(os.environ.get('USERPROFILE',str(Path.home())))/'AppData'/'Local' if os.name=='nt' else Path(os.environ.get('LOCALAPPDATA',str(Path.home()))))/'MBCompresorPro'
 CONFIG = DATA / 'settings.json'
 
@@ -81,6 +81,10 @@ def card():
     f=QFrame(); f.setObjectName('card'); return f
 
 def fmt_size(n): return f'{n/1e9:.2f} GB' if n>=1e9 else f'{n/1e6:.1f} MB'
+
+def fmt_output_size(n):
+    if n>=1e9:return f'{n/1e9:.2f} GB / {n/2**30:.2f} GiB (Windows)'
+    return f'{n/1e6:.1f} MB / {n/2**20:.1f} MiB (Windows)'
 def fmt_time(n):
     n=int(n or 0); return f'{n//3600:02d}:{n%3600//60:02d}:{n%60:02d}'
 
@@ -179,7 +183,7 @@ class MainWindow(QMainWindow):
         self._has_appeared=False;self._closing=False;self._allow_close=False;self._fade_animation=None
         self._animate_windows=QApplication.platformName() not in ('offscreen','minimal')
         if self._animate_windows:self.setWindowOpacity(0.0)
-        self.bridge=Bridge(); self.bridge.metadata.connect(self.on_metadata); self.bridge.event.connect(self.log); self.bridge.progress.connect(self.on_progress); self.bridge.result.connect(self.on_result);self.bridge.save_result.connect(self.on_save_result); self.bridge.done.connect(self.on_done); self.bridge.advice.connect(self.on_advice); self.bridge.advice_error.connect(self.ai_error); self.bridge.download_done.connect(lambda _:None)
+        self.bridge=Bridge(self); self.bridge.metadata.connect(self.on_metadata); self.bridge.event.connect(self.log); self.bridge.progress.connect(self.on_progress); self.bridge.result.connect(self.on_result);self.bridge.save_result.connect(self.on_save_result); self.bridge.done.connect(self.on_done); self.bridge.advice.connect(self.on_advice); self.bridge.advice_error.connect(self.ai_error); self.bridge.download_done.connect(lambda _:None)
         self.setWindowTitle('MB Compresor de Video IA'); self.setMinimumSize(940,720); self.setAcceptDrops(True)
         screen=QApplication.primaryScreen();available=screen.availableGeometry() if screen else None
         self.resize(1200,min(1000,max(720,available.height()-40)) if available else 1000)
@@ -216,7 +220,8 @@ class MainWindow(QMainWindow):
         mode_row=QHBoxLayout();mode_row.addWidget(label('Modo de compresión'));self.mode=combo(MODES,self.settings.get('mode','auto'));mode_row.addWidget(self.mode,1);c.addLayout(mode_row)
         self.mode.setToolTip('Automático elige NVIDIA si supera una prueba real; si falla usa CPU. CPU prioriza calidad por tamaño con dos pasadas.')
         self.mode.currentIndexChanged.connect(self.mode_changed);self.speed.setEnabled(self.mode.currentData()!='cpu')
-        quality_note=label('1080p fija la resolución. H.265 aprovecha mejor el espacio; aumenta los GB para conservar más detalle en videos largos.','muted');quality_note.setWordWrap(True);c.addWidget(quality_note)
+        self.quality_note=label('','muted');self.quality_note.setWordWrap(True);c.addWidget(self.quality_note)
+        self.limit.valueChanged.connect(lambda _:self.update_quality_hint());self.update_quality_hint()
         c.addWidget(button('Aplicar estos ajustes a los pendientes',self.apply_globals)); cl.addWidget(controls)
         self.recovery_notice=button('Recuperar guardados pendientes',self.restore_pending_saves);self.recovery_notice.hide();cl.addWidget(self.recovery_notice)
         bar=QHBoxLayout(); self.queue_title=label('COLA DE COMPRESIÓN  /  0 VIDEOS','eyebrow'); bar.addWidget(self.queue_title); bar.addStretch()
@@ -288,6 +293,13 @@ class MainWindow(QMainWindow):
         self.settings['output_folder']=self.output.text().strip(); save_settings(self.settings); self.log('Carpeta aplicada a los videos pendientes.'); self.persist_queue()
     def unlimited_changed(self,checked):
         self.limit.setEnabled(not checked);self.settings['unlimited']=checked;save_settings(self.settings)
+        self.update_quality_hint()
+    def update_quality_hint(self):
+        if self.unlimited.isChecked():
+            self.quality_note.setText('Sin límite de tamaño. 1080p fija la resolución; la nitidez depende del original y de la codificación.')
+        else:
+            maximum=self.limit.value()
+            self.quality_note.setText(f'Límite: {maximum:g} GB decimales = {maximum*1e9/2**30:.2f} GiB en Windows. 1080p fija la resolución; más GB permiten conservar más detalle.')
     def apply_globals(self):
         for i in self.items:
             if i.state in ('Pendiente','Error','Cancelado'):
@@ -459,7 +471,10 @@ class MainWindow(QMainWindow):
         elif state=='Completado':
             item.output=value;item.recovery_target=None;item.state=state;row['progress'].setValue(100)
             size=Path(value).stat().st_size;saved=1-size/item.info['size'] if item.info and item.info.get('size') else 0
-            row['detail'].setText(f'{fmt_size(size)} · ahorro {saved:.0%} · '+('calidad sin límite de tamaño' if item.options.unlimited else 'límite verificado'))
+            limit_detail='calidad sin límite de tamaño' if item.options.unlimited else f'{size/(item.options.max_gb*1e9):.1%} del límite'
+            row['detail'].setText(f'{fmt_output_size(size)} · ahorro {saved:.0%} · '+limit_detail)
+            row['detail'].setToolTip(f'{size} bytes. Ahorro: reducción de tamaño respecto al original; no es un porcentaje de calidad.')
+            self.log(f'Tamaño final: {fmt_output_size(size)} ({size} bytes). Ahorro de espacio: {saved:.0%}.')
             self.log(f'Completado: {value}');self.pending_saves.pop(item.path,None);self._persist_pending_saves()
         else:
             row['detail'].setText(value[:180] or state);self.log(f'{Path(item.path).name}: {state} {value}')
@@ -523,7 +538,7 @@ class MainWindow(QMainWindow):
         if not batch:QMessageBox.information(self,'IA local','Agrega al menos un video para recomendar ajustes.');return
         if self.ai_busy or self.active or self.saving:return
         self.ai_busy=True; self.ai_btn.setEnabled(False); self.start_btn.setEnabled(False); self.log('Consultando el modelo local. Solo recibe metadatos técnicos; no recibe el video.')
-        snapshot=[(i.path,dict(i.info),(None if i.options.unlimited else i.options.max_gb)) for i in batch]
+        snapshot=[(i.path,dict(i.info,profile_height=i.options.height or 0,profile_fps=i.options.fps or 0,profile_codec=i.options.codec,profile_audio_kbps=i.options.audio_kbps,profile_preset={'calidad':'slow','equilibrado':'medium','rapido':'fast'}.get(i.options.speed,'slow')),(None if i.options.unlimited else i.options.max_gb)) for i in batch]
         def run():
             try:
                 client=OllamaClient(self.settings.get('ollama_url','http://127.0.0.1:11434'))
@@ -620,16 +635,19 @@ def main():
     if len(sys.argv)>2 and sys.argv[1]=='--smoke-test':
         def verify():
             destination=Path(sys.argv[2]);destination.mkdir(parents=True,exist_ok=True)
-            report=dict(unlimited_checked=window.unlimited.isChecked(),size_limit_enabled=window.limit.isEnabled(),max_gb=window.limit.value(),codec=window.codec.currentData(),height=window.res.currentData(),speed=window.speed.currentData(),version=VERSION,frozen=bool(getattr(sys,'frozen',False)),tools=engine.discover_tools())
+            report=dict(unlimited_checked=window.unlimited.isChecked(),size_limit_enabled=window.limit.isEnabled(),max_gb=window.limit.value(),codec=window.codec.currentData(),height=window.res.currentData(),speed=window.speed.currentData(),size_hint=window.quality_note.text(),version=VERSION,frozen=bool(getattr(sys,'frozen',False)),tools=engine.discover_tools())
             try:
                 from settings_dialog import SettingsDialog
-                dialog=SettingsDialog(window.settings,window,check_motors_on_open=False);dialog.show();application.processEvents();dialog.grab().save(str(destination/'settings.png'));dialog.reject()
+                dialog=SettingsDialog(window.settings,window,check_motors_on_open=False);dialog.show();application.processEvents();report['motor_actions']=[b.text() for b in dialog.motor_buttons];dialog.grab().save(str(destination/'settings.png'));dialog.reject()
                 from acceleration import find_nvenc
                 import file_locks
+                import rate_history
+                report['rate_history_available']=True
                 report['lock_diagnostics_available']=True
                 report['compression_modes']=[label for label,value in MODES]
                 report['nvenc']={codec:find_nvenc(report['tools'][0],codec) for codec in ('h264','h265')}
                 report['models']=OllamaClient(timeout=15).models()
+                report['ai_test']=OllamaClient(timeout=30).test_connection(window.settings['ollama_model'])
                 for tool in report['tools']:
                     result=subprocess.run([tool,'-version'],capture_output=True,timeout=15,**({'creationflags':subprocess.CREATE_NO_WINDOW} if os.name=='nt' else {}))
                     if result.returncode:raise RuntimeError('Fallo de motor')
@@ -637,7 +655,17 @@ def main():
             except Exception as exc:report['ok']=False;report['error']=str(exc)
             application.processEvents();window.grab().save(str(destination/'window.png'));(destination/'report.json').write_text(json.dumps(report,indent=2),encoding='utf-8');application.quit()
         QTimer.singleShot(500,verify)
-    return application.exec()
+    try:
+        return application.exec()
+    finally:
+        # Destroy widget/bridge trees while QApplication is still alive. Leaving
+        # them to Python's finalizer order can abort inside Qt on Windows.
+        window._allow_close=True
+        window.theme_timer.stop()
+        if window._fade_animation:window._fade_animation.stop()
+        window.close();window.deleteLater()
+        application.processEvents()
+        QCoreApplication.sendPostedEvents(None,QEvent.DeferredDelete)
 
 if __name__=='__main__':sys.exit(main())
 

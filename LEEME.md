@@ -1,4 +1,4 @@
-# MB Compresor de Video IA · versión 1.0.46
+# MB Compresor de Video IA · versión 1.0.47
 
 Compresor de video de escritorio para Windows. Su función es transformar videos locales a MP4 de alta calidad, con un tamaño máximo por archivo.
 
@@ -103,3 +103,13 @@ H.264 NVIDIA usa el perfil High explícito. Los identificadores aleatorios sigue
 Las mediciones y sus límites se describen en [CALIDAD_VIDEO.md](https://github.com/floresroldanluis/MBCompresorVideoIA/blob/main/CALIDAD_VIDEO.md). El límite de tamaño continúa siendo estricto; para conservar aún más detalle en videos largos puede ser necesario aumentarlo o seleccionar el modo sin límite.
 
 En HEVC con límite se conserva AAC, AC-3 o E-AC-3 compatible con MP4 cuando el bitrate es conocido, cabe en el presupuesto y no se recorta ni convierte a estéreo. Evita una pérdida adicional de audio y deja más espacio para la imagen. HEVC con audio Dolby requiere un reproductor compatible. H.264 con límite conserva AAC como formato de audio compatible.
+
+## Tamaños, tiempo e IA local (1.0.47)
+
+La salida muestra GB decimales y GiB de Windows para los mismos bytes. 1 925 529 102 bytes son 1.93 GB en la aplicación y 1.79 GiB en Windows; ocupan el 98.7% del máximo de 1.95 GB. Ahorro 80% indica reducción de tamaño respecto al original, no porcentaje de calidad. La pantalla y el registro muestran ambas unidades y los bytes exactos.
+
+NVIDIA puede requerir otra codificación si la primera supera el máximo. En el ejemplo de tres horas, dos intentos de unos 30 minutos explican la hora total. Se recuerda localmente el bitrate de una salida válida para reutilizarlo al repetir exactamente el mismo video, perfil, motores, controlador y límite. Cambiar la fuente o el perfil invalida la calibración. Los videos nuevos todavía pueden necesitar reajuste; no se garantiza un tiempo universal. El límite final en bytes sigue verificándose.
+
+Ollama y qwen3:0.6b son un asesor local opcional. Buscar modelos locales comprueba instalación; Probar IA local ejecuta una inferencia real. El asesor conserva las elecciones explícitas de códec, resolución, FPS y calidad de audio/preset. Solo recibe metadatos técnicos; el video permanece en el equipo. La consulta libera el modelo al terminar. El modelo no sustituye a HEVC/NVIDIA ni garantiza mayor compresión o velocidad.
+
+Motores de descarga tiene dos pasos: Buscar motores solo consulta versiones y estado; Instalar actualizaciones o reparar aplica las actualizaciones estables o reparaciones necesarias. Los motores saludables y actuales se conservan. La compresión y la IA ya instalada funcionan sin internet; buscar y descargar nuevas versiones de motores requiere conexión.

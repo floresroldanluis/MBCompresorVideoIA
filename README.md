@@ -2,11 +2,11 @@
 
 <p align="center"><img src="assets/mb-logo-02.png" width="180" alt="MB Compresor de Video IA"></p>
 
-Compresor de escritorio para Windows de 64 bits. Exporta videos locales a MP4 de alta calidad con control de tamaño máximo. Versión **1.0.46**.
+Compresor de escritorio para Windows de 64 bits. Exporta videos locales a MP4 de alta calidad con control de tamaño máximo. Versión **1.0.47**.
 
 ## Descargar
 
-En [Releases](https://github.com/floresroldanluis/MBCompresorVideoIA/releases/latest), descarga **MBCompresorVideoIA-Setup-v1.0.46-windows-x64.exe** y sigue el asistente. Incluye FFmpeg y FFprobe; no requiere Python. Para usar la versión portátil, extrae toda la carpeta del ZIP antes de abrir `MB Compresor Pro.exe`.
+En [Releases](https://github.com/floresroldanluis/MBCompresorVideoIA/releases/latest), descarga **MBCompresorVideoIA-Setup-v1.0.47-windows-x64.exe** y sigue el asistente. Incluye FFmpeg y FFprobe; no requiere Python. Para usar la versión portátil, extrae toda la carpeta del ZIP antes de abrir `MB Compresor Pro.exe`.
 
 ## Funciones
 
@@ -40,7 +40,7 @@ FFmpeg/FFprobe pueden estar en PATH o en `tools/`. Configuración también permi
 
 Para compilar, coloca `ffmpeg.exe` y `ffprobe.exe` en `tools/` (puedes obtenerlos del ZIP publicado) y ejecuta `Construir.ps1`. Con [Inno Setup 6](https://jrsoftware.org/isinfo.php) instalado, `Construir-Instalador.ps1` genera el instalador.
 
-`Preparar-Release.ps1 -ReleaseVersion 1.0.46` genera el ZIP del actualizador y `SHA256SUMS`. La etiqueta del Release, el paquete y `app.py` deben usar la misma versión.
+`Preparar-Release.ps1 -ReleaseVersion 1.0.47` genera el ZIP del actualizador y `SHA256SUMS`. La etiqueta del Release, el paquete y `app.py` deben usar la misma versión.
 
 ## Pruebas
 
@@ -93,3 +93,13 @@ El perfil inicial prioriza H.265/HEVC, Full HD y máxima calidad. Se aplica una 
 NVIDIA aprovecha mejor el presupuesto: reserva inicial menor, medición de video/audio/contenedor y refino acotado desde el original cuando sobra espacio útil. Se mantiene un candidato válido durante el refino y el límite final de bytes sigue siendo estricto. El refino puede añadir tiempo; nunca se rellena el archivo para aparentar calidad.
 
 La resolución 1080p no garantiza el mismo detalle que el original si se limita una película larga a pocos GB. Se validó HEVC con dos muestras reales y retuvo más detalle medido. [Diagnóstico, mediciones y límites](CALIDAD_VIDEO.md).
+
+## Unidades, IA local y motores 1.0.47
+
+La salida muestra GB decimales y GiB de Windows juntos: 1.93 GB y 1.79 GiB pueden representar exactamente los mismos bytes. Ahorro indica reducción de tamaño, no porcentaje de calidad. El límite de 1.95 GB sigue siendo decimal y estricto.
+
+El historial local reutiliza un bitrate ya validado solo al repetir el mismo video, perfil, límite, binarios y controlador. Puede evitar el primer intento que ya había superado el máximo; un video nuevo aún puede requerir reajuste. Los errores del historial no afectan al guardado del MP4.
+
+Configuración permite comprobar Ollama/modelos y ejecutar Probar IA local. El asesor mantiene las elecciones explícitas de calidad, recibe solo metadatos técnicos y libera su modelo tras la consulta. Una vez instalado el modelo funciona sin internet; HEVC/NVIDIA sigue realizando la compresión.
+
+Motores de descarga separa Buscar motores (consulta) de Instalar actualizaciones o reparar (cambios explícitos). Se conservan motores saludables/actualizados y NVIDIA compatible. La búsqueda y descarga de versiones nuevas requiere conexión.

@@ -463,6 +463,20 @@ def compress(source, output_dir, options, control=None, progress=None, log=None,
         escaped=source.as_posix().replace('\\','\\\\').replace(':','\\:').replace("'", "'\\\\''").replace(',','\\,').replace('[','\\[').replace(']','\\]')
         relative=next(i for i,s in enumerate(info['subtitles']) if s['index']==subs[0]['index'])
         vf=f"subtitles=filename='{escaped}':si={relative},"+vf
+    history_context=None;uncalibrated_bitrate=bitrate
+    if backend=='nvidia' and not options.unlimited and duration>=60:
+        # Reuse a measured rate only for this exact source/encoder/driver/plan.
+        # Short samples can mispredict a whole movie's VBR and are not used.
+        try:
+            import rate_history
+            from acceleration import nvidia_info
+            history_context=rate_history.build_context(source,ffmpeg,ffprobe or discover_tools()[1],options,nvidia_info(),info)
+            calibrated=rate_history.lookup(history_context)
+        except Exception:
+            history_context=None;calibrated=None
+        if calibrated:
+            bitrate=calibrated['requested_bitrate']
+            log(f'Calibración local reutilizada: {bitrate//1000} kb/s para este mismo video y perfil. Se mantiene la verificación del límite final.')
     preset={'rapido':'veryfast','equilibrado':'medium','calidad':'slow'}.get(options.speed,options.speed)
     if options.mode=='cpu':preset='slow'
     if preset not in ('ultrafast','superfast','veryfast','faster','fast','medium','slow','slower','veryslow'): raise EncodeError('Velocidad no válida.')
@@ -555,7 +569,7 @@ def compress(source, output_dir, options, control=None, progress=None, log=None,
                     break
                 if gpu and options.mode=='auto':
                     log('Automático: falló NVIDIA; se reintentará con CPU. '+str(exc)[-500:])
-                    backend='cpu';ffmpeg=primary_ffmpeg;continue
+                    backend='cpu';ffmpeg=primary_ffmpeg;bitrate=uncalibrated_bitrate;history_context=None;continue
                 raise
             try:
                 actual=result.stat().st_size
@@ -580,7 +594,7 @@ def compress(source, output_dir, options, control=None, progress=None, log=None,
                     break
                 video_bytes=actual-fixed
                 if best is None or video_bytes>best['video_bytes']:
-                    best=dict(path=result,actual=actual,video_bytes=video_bytes)
+                    best=dict(path=result,actual=actual,video_bytes=video_bytes,bitrate=bitrate)
                 # Optional refinement requires reliable video measurements and
                 # useful measured progress, rather than simply filling bytes.
                 next_bitrate=(_refine_video_bitrate(bitrate,cap,actual,fixed)
@@ -612,6 +626,12 @@ def compress(source, output_dir, options, control=None, progress=None, log=None,
         else: raise EncodeError('No se alcanzó el tamaño máximo; no se publicó ningún archivo.')
         target=finalize_output(result,desired_target,control,log,source)
         preserve_result=False
+        if backend=='nvidia' and history_context is not None:
+            chosen_bitrate=best['bitrate'] if best is not None else bitrate
+            try:
+                rate_history.record_validated(history_context,chosen_bitrate,target,lambda path:probe(path,ffprobe))
+            except Exception:
+                log('MP4 guardado; no se pudo registrar la calibración local opcional.')
         if progress: progress(dict(percent=100,speed=0,eta=0,pass_number=total_passes,total_passes=total_passes,backend=backend,status='Completado'))
         log(f'Guardado: {target.name} ({actual/1e6:.2f} MB).')
         return target

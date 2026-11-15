@@ -36,3 +36,13 @@ El fotograma original ya tiene cierta suavidad de enfoque. La codificación no r
 
 - [NVIDIA: Using FFmpeg with NVIDIA GPU Hardware Acceleration](https://docs.nvidia.com/video-technologies/video-codec-sdk/13.1/ffmpeg-with-nvidia-gpu/): control de bitrate, multipass y evaluación de calidad.
 - [FFmpeg: Two-pass encoding](https://ffmpeg.org/ffmpeg.html): análisis y asignación de bitrate en dos pasadas.
+
+## Unidades y repetición del trabajo (1.0.47)
+
+El resultado real de 1 925 529 102 bytes corresponde a 1.925529102 GB decimales y 1.793 GiB binarios, que Windows etiqueta como GB. Es el 98.7% de 1.95 GB decimales. El espacio restante es aproximadamente 24.47 MB; llenarlo no supone una gran mejora visual y no se añade relleno.
+
+Los registros muestran dos codificaciones completas: el primer bitrate de 1103 kb/s superó el máximo, y el segundo de aproximadamente 1019 kb/s produjo el MP4 válido. El historial local nuevo conserva el bitrate solicitado de la salida seleccionada, únicamente para la misma fuente (ruta/tamaño/fecha), binarios de FFmpeg/FFprobe, GPU/controlador, opciones y máximo. No aprende una regla universal a partir de clips: las muestras cortas anteriores daban ratios de bitrate distintos a los de la película completa.
+
+La calibración solo evita repetir trabajo ya medido cuando coincide el perfil. Los errores del historial no impiden comprimir ni convierten un MP4 ya guardado en fallo. No modifica resolución, FPS, preset ni control de bitrate. Los reintentos y la verificación de bytes permanecen activos.
+
+La IA de Ollama se comprobó mediante inferencia HTTP en loopback, sin enviar imágenes, video, títulos o rutas. Respeta el perfil elegido y libera su modelo tras la respuesta. Es un asesor opcional de ajustes, no un codificador neural de video.

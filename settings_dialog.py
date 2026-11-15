@@ -30,7 +30,7 @@ class SettingsDialog(PopupDialog):
     def __init__(self, settings, parent=None, check_motors_on_open=True):
         super().__init__(parent)
         self.values = dict(settings); self.tasks = []; self.fields = {}
-        self.setWindowTitle('Configuración · MB Compresor Pro')
+        self.setWindowTitle('Configuración · MB Compresor de Video IA')
         self.resize(680, 790)
         root = self.body
         controls=QHBoxLayout();controls.addStretch();controls.addWidget(icon_button('close','Cerrar configuración',self.reject));root.addLayout(controls)
@@ -50,9 +50,13 @@ class SettingsDialog(PopupDialog):
         self.note('Por defecto se guarda junto al original. Downloads es opcional. El original se conserva.')
         self.section('Inteligencia artificial · 100 % local')
         self.line('ollama_url', 'Servidor Ollama local', 'http://127.0.0.1:11434')
-        self.combo('ollama_model', 'Modelo instalado', [], '')
-        self.button('Buscar modelos locales', self.refresh_models)
-        self.note('Instala Ollama y un modelo local para recibir recomendaciones. Se envían solo metadatos técnicos al servidor de tu equipo; no se sube el video.')
+        self.combo('ollama_model', 'Modelo local', [], '')
+        ai_actions=QHBoxLayout();self.ai_buttons=[];self.ai_busy=False
+        for text,callback in [('Buscar modelos locales',self.refresh_models),('Probar IA local',self.test_local_ai)]:
+            b=QPushButton(text);b.clicked.connect(callback);ai_actions.addWidget(b);self.ai_buttons.append(b)
+        self.form.addLayout(ai_actions)
+        self.ai_status=QLabel('Ollama y modelo: pendientes de comprobar.');self.ai_status.setWordWrap(True);self.ai_status.setObjectName('muted');self.form.addWidget(self.ai_status)
+        self.note('La IA local asesora los ajustes; HEVC/NVIDIA comprimen el video. Una vez instalado el modelo, funciona sin internet. Solo recibe metadatos técnicos, nunca el video; al terminar libera su memoria.')
         self.section('Actualización de la aplicación')
         from app_updates import DEFAULT_REPOSITORY
         self.line('releases_url','Repositorio o GitHub Releases',DEFAULT_REPOSITORY)
@@ -72,11 +76,12 @@ class SettingsDialog(PopupDialog):
         self.motor_status=QLabel('Estado: comprobación pendiente…');self.motor_status.setWordWrap(True);self.motor_status.setTextFormat(Qt.RichText)
         self.motor_status.setStyleSheet('background:#e9f0fa;color:#132c49;border-radius:12px;padding:16px;line-height:1.6')
         self.form.addWidget(self.motor_status)
-        motor_actions=QHBoxLayout();self.motor_buttons=[]
-        for title,callback in [('Actualizar motores',self.update_downloader),('Reparar FFmpeg',self.repair_engines)]:
+        motor_actions=QHBoxLayout();self.motor_buttons=[];self.motor_report=None
+        for title,callback in [('Buscar motores',self.check_engines),('Instalar actualizaciones o reparar',self.install_or_repair_engines)]:
             b=QPushButton(title);b.setFixedHeight(44);b.clicked.connect(callback);motor_actions.addWidget(b);self.motor_buttons.append(b)
+        self.motor_buttons[1].setEnabled(False)
         self.form.addLayout(motor_actions);self.motor_busy=False;self.motor_refresh_pending=False
-        self.note('Compara las versiones instaladas con sus publicaciones oficiales. Si no hay conexión o no se pueden comparar, lo indica sin afirmar que estén actualizadas.')
+        self.note('Buscar motores solo consulta las versiones instaladas y sus publicaciones estables. Instalar actualizaciones o reparar aplica los cambios necesarios y conserva los motores que funcionan. Si no hay conexión, lo indica sin afirmar que estén actualizados.')
         self.status = QLabel('Listo.'); self.status.setWordWrap(True); self.form.addWidget(self.status)
         self.form.addStretch()
         buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
@@ -116,13 +121,36 @@ class SettingsDialog(PopupDialog):
     def refresh_models(self):
         from local_ai import OllamaClient
         url=self.fields['ollama_url'].text().strip()
-        def loaded(models):
+        def loaded(report):
+            models=report['models']
             field=self.fields['ollama_model']; current=field.currentText(); field.clear(); field.addItems(models)
             if current in models: field.setCurrentText(current)
-            self.status.setText(f'{len(models)} modelos locales disponibles.' if models else 'No hay modelos locales instalados en Ollama.')
-        self.run_task(lambda:OllamaClient(url,timeout=10).models(),loaded)
+            self.ai_status.setText(f'Ollama {report["version"]} instalado y disponible · {len(models)} modelos locales instalados.' if models else f'Ollama {report["version"]} disponible · no hay modelos locales instalados.')
+        self.run_ai_task(lambda:OllamaClient(url,timeout=10).status(),loaded,'Comprobando Ollama y modelos locales…')
+    def test_local_ai(self):
+        from local_ai import OllamaClient
+        url=self.fields['ollama_url'].text().strip();model=self.fields['ollama_model'].currentText()
+        if not model:self.ai_status.setText('Busca o selecciona un modelo local instalado.');return
+        def tested(report):
+            self.ai_status.setText(f'Ollama {report["version"]} · {report["model"]} instalado y probado · 100 % local. Prueba: {report["elapsed_seconds"]:.1f} s. Memoria liberada al terminar.')
+        self.run_ai_task(lambda:OllamaClient(url,timeout=120).test_connection(model),tested,'Probando una respuesta del modelo en este equipo…')
+    def run_ai_task(self,fn,callback,text):
+        parent=self.parent()
+        if self.ai_busy:return
+        if getattr(parent,'active',False) or getattr(parent,'ai_busy',False):
+            self.ai_status.setText('Espera a que terminen las tareas actuales antes de probar la IA.');return
+        self.ai_busy=True;self.ai_status.setText(text)
+        for b in self.ai_buttons:b.setEnabled(False)
+        task=self.run_task(fn,callback)
+        task.failed.connect(lambda error:self.ai_status.setText('IA local no disponible: '+error))
+        def finished():
+            self.ai_busy=False
+            for b in self.ai_buttons:b.setEnabled(True)
+        task.finished.connect(finished)
     def check_engines(self):
+        if self.motor_busy:return
         from motors import inspect_motors
+        self.motor_report=None
         settings=self.motor_settings()
         self.run_motor_task(lambda:inspect_motors(settings,online=True),self.show_motor_report,'Buscando motores y versiones oficiales…')
     def motor_settings(self):
@@ -138,15 +166,20 @@ class SettingsDialog(PopupDialog):
         self.motor_busy=True;self.motor_status.setText(html.escape(text))
         for b in self.motor_buttons:b.setEnabled(False)
         task=self.run_task(fn,callback)
-        task.failed.connect(lambda error:self.motor_status.setText('No se pudo completar: '+html.escape(error)))
+        def failed(error):
+            self.motor_report=None
+            self.motor_status.setText('No se pudo completar: '+html.escape(error))
+        task.failed.connect(failed)
         def finished():
             self.motor_busy=False
-            for b in self.motor_buttons:b.setEnabled(True)
+            self.motor_buttons[0].setEnabled(True)
+            self.motor_buttons[1].setEnabled(self.motor_report is not None)
             if self.motor_refresh_pending:
                 self.motor_refresh_pending=False
                 QTimer.singleShot(0,self.check_engines)
         task.finished.connect(finished)
     def show_motor_report(self,report):
+        self.motor_report=report
         rows=['Estado: <b>'+('Listo para comprimir' if report.get('ready') else 'Requiere atención')+'</b>']
         for name in ('ffmpeg','ffprobe'):
             entry=report.get('entries',{}).get(name,{})
@@ -174,21 +207,26 @@ class SettingsDialog(PopupDialog):
         rows.append('<small>yt-dlp y Deno no son necesarios para comprimir archivos locales.</small>')
         rows.append('Automático: <b>NVIDIA si funciona; CPU como alternativa</b>')
         rows.append('Modo autónomo: <b>'+('Sí, motores incluidos' if report.get('autonomous') else 'Usa uno o más motores externos')+'</b>')
-        self.motor_status.setText('<br>'.join(rows));self.status.setText('Comprobación de motores terminada.')
-    def update_downloader(self):
+        self.motor_status.setText('<br>'.join(rows));self.status.setText('Búsqueda de motores terminada. Instalar actualizaciones o reparar aplica únicamente los cambios necesarios.')
+    def install_or_repair_engines(self):
+        if self.motor_busy:return
+        if self.motor_report is None:
+            self.status.setText('Primero pulsa Buscar motores para comprobar qué necesita actualizarse o repararse.')
+            return
         from motors import update_motors
         settings=self.motor_settings()
-        self.run_motor_task(lambda:update_motors(settings),self.motors_changed,'Comprobando e instalando actualizaciones de motores…')
+        self.run_motor_task(lambda:update_motors(settings),self.motors_changed,'Instalando actualizaciones estables o reparando los motores necesarios…')
+    def update_downloader(self):
+        self.install_or_repair_engines()
     def repair_engines(self):
-        from motors import repair_ffmpeg
-        settings=self.motor_settings()
-        self.run_motor_task(lambda:repair_ffmpeg(settings),self.motors_changed,'Validando FFmpeg y FFprobe; reparando si es necesario…')
+        self.install_or_repair_engines()
     def motors_changed(self,result):
         for name in ('ffmpeg','ffprobe'):
             if result.get(name):self.values[name]=result[name]
         messages=result.get('messages',[])
         self.status.setText('\n'.join(messages)+'\nGuarda los cambios para conservar las rutas.')
         self.motor_status.setText('Operación terminada.<br>'+html.escape('\n'.join(messages)).replace('\n','<br>'))
+        self.motor_report=None
         self.motor_refresh_pending=True
     def check_release(self):
         if self.update_busy:return
